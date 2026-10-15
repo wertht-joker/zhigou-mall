@@ -8,6 +8,7 @@ import json
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.errors import NotFoundError
 from app.rag import generator
 from app.schemas.chat import ChatResponse, Source
 from app.services import session_service, tools
@@ -39,7 +40,8 @@ def _build_messages(history: list, question: str) -> list[dict]:
     return messages
 
 
-def _run_agent(messages: list[dict], db: Session, sources: list[dict], direct: list[str]):
+def _run_agent(messages: list[dict], db: Session, sources: list[dict], direct: list[str],
+               tenant_id: int | None = None):
     """ReAct 工具调用循环。
 
     每一轮让模型自主决定：调用工具（执行后把结果喂回模型，进入下一轮），
@@ -72,7 +74,7 @@ def _run_agent(messages: list[dict], db: Session, sources: list[dict], direct: l
             args = tools.parse_arguments(tc["function"]["arguments"])
             yield tools.tool_label(name, args)
 
-            result_text, hit_sources = tools.execute_tool(name, args, db)
+            result_text, hit_sources = tools.execute_tool(name, args, db, tenant_id)
             sources.extend(hit_sources)
 
             # 工具结果以 tool 角色喂回模型，供其下一轮推理
@@ -96,29 +98,36 @@ def _dedup_sources(sources: list[dict]) -> list[dict]:
     return result
 
 
-def ask(db: Session, question: str, session_id: int | None = None) -> ChatResponse:
+def _resolve_session(db: Session, question: str, session_id: int | None,
+                     tenant_id: int | None) -> tuple[int, list]:
+    """确定本次问答的会话：没有 session_id 就新建，有则校验归属租户后读取历史"""
+    if session_id is None:
+        session = session_service.create_session(db, title=question[:20], tenant_id=tenant_id)
+        return session.id, []
+    if not session_service.get_session(db, session_id, tenant_id):
+        raise NotFoundError("会话不存在")
+    return session_id, session_service.get_history(db, session_id)
+
+
+def ask(db: Session, question: str, session_id: int | None = None,
+        tenant_id: int | None = None) -> ChatResponse:
     """问答主流程（Agent 版，一次性返回）"""
     # 1. 处理会话：没传 session_id 则新建
-    if session_id is None:
-        session = session_service.create_session(db, title=question[:20])
-        session_id = session.id
-        history = []
-    else:
-        history = session_service.get_history(db, session_id)
+    session_id, history = _resolve_session(db, question, session_id, tenant_id)
 
     # 2. Agent 循环：模型自主决定调用哪些工具
     messages = _build_messages(history, question)
     sources: list[dict] = []
     direct: list[str] = []
-    for _ in _run_agent(messages, db, sources, direct):
+    for _ in _run_agent(messages, db, sources, direct, tenant_id):
         pass  # 非流式接口不展示中间步骤
 
     # 3. 生成最终答案：模型直接答完了就用它，否则基于工具结果再生成
     answer = direct[0] if direct else generator.generate_text(messages)
 
     # 4. 保存本轮消息（用户问题 + AI 回答）
-    session_service.save_message(db, session_id, "user", question)
-    msg = session_service.save_message(db, session_id, "assistant", answer)
+    session_service.save_message(db, session_id, "user", question, tenant_id)
+    msg = session_service.save_message(db, session_id, "assistant", answer, tenant_id)
 
     return ChatResponse(
         answer=answer,
@@ -128,25 +137,21 @@ def ask(db: Session, question: str, session_id: int | None = None) -> ChatRespon
     )
 
 
-def ask_stream(db: Session, question: str, session_id: int | None = None):
+def ask_stream(db: Session, question: str, session_id: int | None = None,
+               tenant_id: int | None = None):
     """流式问答：Agent 先自主调用工具，再流式输出答案（SSE 事件生成器）"""
-    # 1. 会话处理
-    if session_id is None:
-        session = session_service.create_session(db, title=question[:20])
-        session_id = session.id
-        history = []
-    else:
-        history = session_service.get_history(db, session_id)
+    # 1. 会话处理（校验归属租户）
+    session_id, history = _resolve_session(db, question, session_id, tenant_id)
 
     # 2. Agent 循环：每执行一次工具就推一条 step 事件给前端
     messages = _build_messages(history, question)
     sources: list[dict] = []
     direct: list[str] = []
-    for label in _run_agent(messages, db, sources, direct):
+    for label in _run_agent(messages, db, sources, direct, tenant_id):
         yield f"data: {json.dumps({'type': 'step', 'label': label}, ensure_ascii=False)}\n\n"
 
     # 3. 保存用户消息
-    session_service.save_message(db, session_id, "user", question)
+    session_service.save_message(db, session_id, "user", question, tenant_id)
 
     # 4. 先发 meta（会话ID + 引用来源）
     yield f"data: {json.dumps({'type': 'meta', 'sources': _dedup_sources(sources), 'session_id': session_id}, ensure_ascii=False)}\n\n"
@@ -168,5 +173,5 @@ def ask_stream(db: Session, question: str, session_id: int | None = None):
             yield f"data: {json.dumps({'type': 'delta', 'content': full_answer}, ensure_ascii=False)}\n\n"
 
     # 6. 保存 AI 回答，发 done
-    msg = session_service.save_message(db, session_id, "assistant", full_answer)
+    msg = session_service.save_message(db, session_id, "assistant", full_answer, tenant_id)
     yield f"data: {json.dumps({'type': 'done', 'message_id': msg.id}, ensure_ascii=False)}\n\n"

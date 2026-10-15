@@ -154,6 +154,12 @@ async function send() {
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
       body: JSON.stringify({ question: q, session_id: sessionId.value }),
     })
+    // 建流前的鉴权/参数错误会以普通 JSON 4xx 返回，需先判断 resp.ok
+    if (!resp.ok) {
+      let msg = '请求失败'
+      try { msg = (await resp.json()).message || msg } catch (e) {}
+      throw new Error(msg)
+    }
     const reader = resp.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
@@ -195,6 +201,9 @@ function handleEvent(event, aiMsg) {
     scrollBottom()
   } else if (event.type === 'done') {
     aiMsg.messageId = event.message_id
+  } else if (event.type === 'error') {
+    // 流内错误（如模型调用失败），追加展示
+    aiMsg.content += (aiMsg.content ? '\n' : '') + '⚠️ ' + (event.message || '处理失败')
   }
 }
 

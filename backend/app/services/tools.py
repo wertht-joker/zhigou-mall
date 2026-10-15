@@ -8,9 +8,9 @@ import json
 
 from sqlalchemy.orm import Session
 
-from app.models.document import Document
-from app.models.order import Order
 from app.rag import retriever
+from app.repositories.document_repository import DocumentRepository
+from app.services import order_provider
 
 # ===== 工具声明（OpenAI / DeepSeek function-calling 格式）=====
 
@@ -70,13 +70,14 @@ def tool_label(name: str, args: dict) -> str:
     return f"🛠 调用工具：{name}"
 
 
-def _search_knowledge_base(args: dict, db: Session) -> tuple[str, list[dict]]:
-    """检索知识库：返回给模型看的文本 + 给前端的引用来源"""
+def _search_knowledge_base(args: dict, db: Session,
+                           tenant_id: int | None = None) -> tuple[str, list[dict]]:
+    """检索知识库：返回给模型看的文本 + 给前端的引用来源（限定当前租户）"""
     query = (args.get("query") or "").strip()
     if not query:
         return "未提供检索关键词。", []
 
-    hits = retriever.search(query)
+    hits = retriever.search(query, tenant_id=tenant_id)
     if not hits:
         return "知识库中未检索到相关内容。", []
 
@@ -84,7 +85,7 @@ def _search_knowledge_base(args: dict, db: Session) -> tuple[str, list[dict]]:
     sources = []
     for i, h in enumerate(hits):
         lines.append(f"[片段{i + 1}] {h['text']}")
-        doc = db.get(Document, h["doc_id"])
+        doc = DocumentRepository(db).get(h["doc_id"], tenant_id)
         sources.append({
             "doc_id": h["doc_id"],
             "doc_name": doc.name if doc else "未知文档",
@@ -95,13 +96,18 @@ def _search_knowledge_base(args: dict, db: Session) -> tuple[str, list[dict]]:
     return "\n\n".join(lines), sources
 
 
-def _query_order(args: dict, db: Session) -> tuple[str, list[dict]]:
-    """按订单号查询订单（无来源引用）"""
+def _query_order(args: dict, db: Session,
+                 tenant_id: int | None = None) -> tuple[str, list[dict]]:
+    """按订单号查询订单（数据来源由 ORDER_PROVIDER 决定，无来源引用，限定当前租户）"""
     order_no = (args.get("order_no") or "").strip()
     if not order_no:
         return "未提供订单号。", []
 
-    order = db.query(Order).filter(Order.order_no == order_no).first()
+    try:
+        order = order_provider.get_provider(db).query(order_no, tenant_id)
+    except order_provider.OrderServiceError as exc:
+        return f"订单查询失败：{exc}", []
+
     if not order:
         return f"未查询到订单号 {order_no} 对应的订单，请核对订单号是否正确。", []
 
@@ -115,12 +121,13 @@ def _query_order(args: dict, db: Session) -> tuple[str, list[dict]]:
     return info, []
 
 
-def execute_tool(name: str, args: dict, db: Session) -> tuple[str, list[dict]]:
-    """执行工具，返回 (给模型看的结果文本, 引用来源列表)"""
+def execute_tool(name: str, args: dict, db: Session,
+                 tenant_id: int | None = None) -> tuple[str, list[dict]]:
+    """执行工具，返回 (给模型看的结果文本, 引用来源列表)，数据限定当前租户"""
     if name == "search_knowledge_base":
-        return _search_knowledge_base(args, db)
+        return _search_knowledge_base(args, db, tenant_id)
     if name == "query_order":
-        return _query_order(args, db)
+        return _query_order(args, db, tenant_id)
     return f"未知工具：{name}", []
 
 

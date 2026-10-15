@@ -1,10 +1,28 @@
-"""DeepSeek 生成：调用大模型生成答案"""
-from openai import OpenAI
+"""DeepSeek 生成：调用大模型生成答案
+
+非流式调用统一走 _create()，带指数退避重试（网络抖动 / 限流 / 5xx）；
+流式调用不重试 —— 已经吐出部分内容再重试会导致答案重复，得不偿失。
+"""
+import os
+
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+
+from openai import (  # noqa: E402
+    APIConnectionError,
+    APITimeoutError,
+    InternalServerError,
+    OpenAI,
+    RateLimitError,
+)
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.core.config import settings
 
 # 模块级缓存客户端
 _client = None
+
+# 只对「可重试」的错误退避重试：连接失败、超时、限流、服务端 5xx
+_RETRYABLE = (APIConnectionError, APITimeoutError, RateLimitError, InternalServerError)
 
 
 def _get_client() -> OpenAI:
@@ -18,10 +36,20 @@ def _get_client() -> OpenAI:
     return _client
 
 
+@retry(
+    reraise=True,
+    stop=stop_after_attempt(settings.llm_max_retries),
+    wait=wait_exponential(multiplier=0.5, max=4),
+    retry=retry_if_exception_type(_RETRYABLE),
+)
+def _create(**kwargs):
+    """带重试的模型调用入口（非流式）"""
+    return _get_client().chat.completions.create(**kwargs)
+
+
 def generate(system_prompt: str, user_prompt: str) -> str:
     """调用 DeepSeek 生成回答文本"""
-    client = _get_client()
-    resp = client.chat.completions.create(
+    resp = _create(
         model=settings.deepseek_model,
         messages=[
             {"role": "system", "content": system_prompt},
@@ -33,9 +61,8 @@ def generate(system_prompt: str, user_prompt: str) -> str:
 
 
 def generate_stream(system_prompt: str, user_prompt: str):
-    """流式生成，逐段返回增量文本（用于 SSE 流式输出）"""
-    client = _get_client()
-    stream = client.chat.completions.create(
+    """流式生成，逐段返回增量文本（用于 SSE 流式输出，不做重试）"""
+    stream = _get_client().chat.completions.create(
         model=settings.deepseek_model,
         messages=[
             {"role": "system", "content": system_prompt},
@@ -58,8 +85,7 @@ def chat_with_tools(messages: list[dict], tools: list[dict]) -> dict:
     返回结构：{"role": "assistant", "content": "...", "tool_calls": [...]}
     模型若决定调用工具，tool_calls 非空；若决定直接回答，content 非空、tool_calls 缺省。
     """
-    client = _get_client()
-    resp = client.chat.completions.create(
+    resp = _create(
         model=settings.deepseek_model,
         messages=messages,
         tools=tools,
@@ -85,9 +111,8 @@ def chat_with_tools(messages: list[dict], tools: list[dict]) -> dict:
 
 
 def stream_answer(messages: list[dict]):
-    """流式生成最终答案（不带工具），逐段返回增量文本"""
-    client = _get_client()
-    stream = client.chat.completions.create(
+    """流式生成最终答案（不带工具），逐段返回增量文本（不做重试）"""
+    stream = _get_client().chat.completions.create(
         model=settings.deepseek_model,
         messages=messages,
         temperature=0.3,
@@ -100,8 +125,7 @@ def stream_answer(messages: list[dict]):
 
 def generate_text(messages: list[dict]) -> str:
     """非流式生成完整答案，流式失败时兜底"""
-    client = _get_client()
-    resp = client.chat.completions.create(
+    resp = _create(
         model=settings.deepseek_model,
         messages=messages,
         temperature=0.3,

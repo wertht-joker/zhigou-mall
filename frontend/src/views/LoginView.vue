@@ -8,6 +8,9 @@
       </el-tabs>
       <el-form>
         <el-form-item>
+          <el-input v-model="form.tenant_code" placeholder="租户编码（留空为默认租户）" />
+        </el-form-item>
+        <el-form-item>
           <el-input v-model="form.username" placeholder="用户名" />
         </el-form-item>
         <el-form-item>
@@ -18,7 +21,7 @@
         </el-button>
       </el-form>
       <div class="login-tip">
-        默认管理员：admin / admin123
+        默认管理员：admin / admin123（租户编码留空即默认租户）
       </div>
     </div>
   </div>
@@ -31,7 +34,7 @@ import request, { TOKEN_KEY } from '../api'
 
 const tab = ref('login')
 const loading = ref(false)
-const form = ref({ username: '', password: '' })
+const form = ref({ tenant_code: '', username: '', password: '' })
 
 async function submit() {
   if (!form.value.username || !form.value.password) {
@@ -44,6 +47,7 @@ async function submit() {
     if (tab.value === 'login') {
       localStorage.setItem(TOKEN_KEY, data.token)
       localStorage.setItem('kb_user', JSON.stringify(data.user))
+      localStorage.setItem('kb_tenant', JSON.stringify(data.tenant))
       ElMessage.success('登录成功')
       window.location.href = '/'
     } else {

@@ -20,11 +20,12 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def create_token(user_id: int, role: str) -> str:
-    """生成 JWT，载荷携带用户ID和角色"""
+def create_token(user_id: int, role: str, tenant_id: int | None = None) -> str:
+    """生成 JWT，载荷携带用户ID、角色与所属租户"""
     payload = {
         "sub": str(user_id),
         "role": role,
+        "tenant_id": tenant_id,
         "exp": datetime.utcnow() + timedelta(hours=settings.jwt_expire_hours),
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")

@@ -8,7 +8,10 @@
         <el-menu-item index="/categories">🗂️ 分类管理</el-menu-item>
       </el-menu>
       <div class="user-box">
-        <span class="username">👤 {{ username }}</span>
+        <div class="user-info">
+          <span class="username">👤 {{ username }}</span>
+          <span class="tenant">🏢 {{ tenantName }}</span>
+        </div>
         <el-button text size="small" @click="logout">退出</el-button>
       </div>
     </el-aside>
@@ -35,9 +38,19 @@ const username = computed(() => {
   }
 })
 
+const tenantName = computed(() => {
+  try {
+    const t = JSON.parse(localStorage.getItem('kb_tenant') || '{}')
+    return t.name || t.code || '默认租户'
+  } catch {
+    return '默认租户'
+  }
+})
+
 function logout() {
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem('kb_user')
+  localStorage.removeItem('kb_tenant')
   window.location.href = '/login'
 }
 </script>
@@ -49,6 +62,8 @@ body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #f
 .aside { background: #fff; border-right: 1px solid #eee; display: flex; flex-direction: column; }
 .logo { font-size: 18px; font-weight: bold; color: #409eff; padding: 20px 16px; }
 .user-box { margin-top: auto; padding: 16px; border-top: 1px solid #eee; display: flex; align-items: center; justify-content: space-between; }
+.user-info { display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
 .username { font-size: 13px; color: #666; }
+.tenant { font-size: 12px; color: #999; }
 .main { padding: 0; background: #f5f6fa; }
 </style>

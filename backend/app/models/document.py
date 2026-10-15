@@ -1,7 +1,7 @@
 """文档元数据模型"""
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String
+from sqlalchemy import DateTime, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.database import Base
@@ -11,8 +11,11 @@ class Document(Base):
     """知识文档元数据（向量数据单独存 Milvus）"""
 
     __tablename__ = "documents"
+    __table_args__ = (Index("ix_documents_tenant_created", "tenant_id", "created_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # 所属租户（多租户隔离边界）
+    tenant_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 原始文件名
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     # 文件格式：pdf / docx / xlsx / md

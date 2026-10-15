@@ -1,7 +1,7 @@
 """订单模型（供 Agent 的订单查询工具使用）"""
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String
+from sqlalchemy import DateTime, Float, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.database import Base
@@ -11,8 +11,11 @@ class Order(Base):
     """订单信息（演示用，真实系统由业务库提供）"""
 
     __tablename__ = "orders"
+    __table_args__ = (Index("ix_orders_tenant_no", "tenant_id", "order_no"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # 所属租户（多租户隔离边界）
+    tenant_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 订单号，对外查询的唯一标识
     order_no: Mapped[str] = mapped_column(String(30), unique=True, index=True, nullable=False)
     # 商品名称
