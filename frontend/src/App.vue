@@ -1,69 +1,24 @@
 <template>
-  <el-container class="layout">
-    <el-aside width="200px" class="aside">
-      <div class="logo">🤖 客服知识库</div>
-      <el-menu :default-active="activeMenu" router>
-        <el-menu-item index="/">💬 智能问答</el-menu-item>
-        <el-menu-item index="/documents">📄 文档管理</el-menu-item>
-        <el-menu-item index="/categories">🗂️ 分类管理</el-menu-item>
-      </el-menu>
-      <div class="user-box">
-        <div class="user-info">
-          <span class="username">👤 {{ username }}</span>
-          <span class="tenant">🏢 {{ tenantName }}</span>
-        </div>
-        <el-button text size="small" @click="logout">退出</el-button>
-      </div>
-    </el-aside>
-    <el-main class="main">
-      <router-view />
-    </el-main>
-  </el-container>
+  <router-view />
 </template>
 
-<script setup>
-import { computed } from 'vue'
-import { useRoute } from 'vue-router'
-import { TOKEN_KEY } from './api'
-
-const route = useRoute()
-const activeMenu = computed(() => route.path)
-
-const username = computed(() => {
-  try {
-    const u = JSON.parse(localStorage.getItem('kb_user') || '{}')
-    return u.username || '未登录'
-  } catch {
-    return '未登录'
-  }
-})
-
-const tenantName = computed(() => {
-  try {
-    const t = JSON.parse(localStorage.getItem('kb_tenant') || '{}')
-    return t.name || t.code || '默认租户'
-  } catch {
-    return '默认租户'
-  }
-})
-
-function logout() {
-  localStorage.removeItem(TOKEN_KEY)
-  localStorage.removeItem('kb_user')
-  localStorage.removeItem('kb_tenant')
-  window.location.href = '/login'
-}
-</script>
-
 <style>
+:root {
+  /* 京东红主题：覆盖 Element Plus 主色 */
+  --el-color-primary: #e1251b;
+  --el-color-primary-light-3: #ea5a4f;
+  --el-color-primary-light-5: #f08f83;
+  --el-color-primary-light-7: #f7c3ba;
+  --el-color-primary-light-8: #fadbd2;
+  --el-color-primary-light-9: #fcedea;
+  --el-color-primary-dark-2: #b41e15;
+}
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #f5f6fa; }
-.layout { height: 100vh; }
-.aside { background: #fff; border-right: 1px solid #eee; display: flex; flex-direction: column; }
-.logo { font-size: 18px; font-weight: bold; color: #409eff; padding: 20px 16px; }
-.user-box { margin-top: auto; padding: 16px; border-top: 1px solid #eee; display: flex; align-items: center; justify-content: space-between; }
-.user-info { display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
-.username { font-size: 13px; color: #666; }
-.tenant { font-size: 12px; color: #999; }
-.main { padding: 0; background: #f5f6fa; }
+body {
+  font-family: -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif;
+  background: #f4f5f7;
+  color: #262626;
+}
+a { text-decoration: none; color: inherit; }
+.price { color: #e1251b; font-weight: 600; }
 </style>

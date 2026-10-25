@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     )
 
     # ===== 应用 =====
-    app_name: str = "企业客服知识库"
+    app_name: str = "智购商城 · AI 智能客服电商平台"
 
     # ===== DeepSeek 对话模型 =====
     deepseek_api_key: str = ""
@@ -88,16 +88,13 @@ class Settings(BaseSettings):
     # 网络抖动 / 限流 / 5xx 时的最大尝试次数（指数退避）
     llm_max_retries: int = 3
 
-    # ===== 订单查询 =====
-    # 订单数据来源：local（本地演示订单表）/ openapi（第三方电商平台 OpenAPI）
-    order_provider: str = "local"
-    order_api_base_url: str = ""
-    # 订单详情接口路径，{order_no} 为订单号占位符
-    order_api_order_path: str = "/open/orders/{order_no}"
-    order_app_key: str = ""
-    order_app_secret: str = ""
-    order_access_token: str = ""
-    order_api_timeout: float = 5.0
+    # ===== 演示数据种子 =====
+    # 启动时写入演示店铺 / 商品 / 顾客历史订单
+    seed_demo_data: bool = True
+    # 启动时把 samples/ 下的客服知识文档导入平台知识库（需可加载 Embedding 模型）
+    seed_knowledge: bool = True
+    # 知识文档目录（相对项目根目录）
+    samples_dir: str = "samples"
 
 
 # 全局单例，供各模块 import

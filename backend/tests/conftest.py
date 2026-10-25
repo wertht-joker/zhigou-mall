@@ -67,8 +67,7 @@ def client(engine, monkeypatch):
     """TestClient：内存库覆盖 get_db，启动钩子与 LLM 全部打桩"""
     # 启动钩子会迁移并写真实库，这里禁用，改为完全依赖内存库
     monkeypatch.setattr("app.main.run_migrations", lambda: None)
-    monkeypatch.setattr("app.main.create_default_admin", lambda: None)
-    monkeypatch.setattr("app.main.seed_demo_orders", lambda: None)
+    monkeypatch.setattr("app.main.run_seed", lambda: None)
     # 清空进程内限流桶，避免用例间相互影响
     from app.core.rate_limit import reset_memory_buckets
 

@@ -36,3 +36,7 @@ frontend/dist/
 .DS_Store
 .idea/
 .vscode/
+
+# ===== IDE / 临时文件 =====
+.trae/
+lark_qr.png

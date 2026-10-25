@@ -4,9 +4,10 @@
 HTTP 401 / 403 + 统一响应结构。
 
 权限模型：角色 → 权限点集合（见 ROLE_PERMISSIONS）。
-- admin  ：文档管理 + 分类管理 + 反馈查看 + 租户管理
-- editor ：文档管理 + 分类管理
-- viewer ：仅可问答/查看（user 为历史角色，等同 viewer）
+- admin    ：商家管理员 —— 商品/文档/分类管理 + 反馈查看 + 租户管理
+- editor   ：商家运营   —— 商品/文档/分类管理
+- customer ：顾客 —— 逛商城、下单、与 AI 客服对话，无管理权限
+- user/viewer：历史角色，等同顾客（无管理权限）
 """
 from fastapi import Depends, Header
 from sqlalchemy.orm import Session
@@ -22,8 +23,12 @@ from app.utils import security
 
 # 角色 → 权限点
 ROLE_PERMISSIONS: dict[str, set[str]] = {
-    "admin": {"document:manage", "category:manage", "feedback:view", "tenant:manage"},
-    "editor": {"document:manage", "category:manage"},
+    "admin": {
+        "product:manage", "order:manage",
+        "document:manage", "category:manage", "feedback:view", "tenant:manage",
+    },
+    "editor": {"product:manage", "order:manage", "document:manage", "category:manage"},
+    "customer": set(),
     "viewer": set(),
 }
 

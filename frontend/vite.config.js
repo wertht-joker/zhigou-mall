@@ -6,9 +6,13 @@ export default defineConfig({
   plugins: [vue()],
   server: {
     port: 5173,
-    // 开发环境代理：/api 转发到后端，避免跨域
+    // 开发环境代理：/api 与 /static（商品实物图）转发到后端，避免跨域
     proxy: {
       '/api': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
+      '/static': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },

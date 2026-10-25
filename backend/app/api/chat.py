@@ -29,7 +29,7 @@ def chat_stream(
     前端需先判断 resp.ok 再读取流。
     """
     return StreamingResponse(
-        chat_service.ask_stream(db, req.question, req.session_id, tenant.id),
+        chat_service.ask_stream(db, req.question, req.session_id, tenant.id, user.id),
         media_type="text/event-stream",
     )
 
@@ -42,6 +42,6 @@ def chat(
     tenant: Tenant = Depends(get_current_tenant),
     _rate: None = Depends(rate_limit("chat")),
 ):
-    """提问并获取带引用来源的答案（仅当前租户的知识库）"""
-    resp = chat_service.ask(db, req.question, req.session_id, tenant.id)
+    """提问并获取带引用来源的答案（知识库按商家隔离，订单工具按用户隔离）"""
+    resp = chat_service.ask(db, req.question, req.session_id, tenant.id, user.id)
     return success(resp.model_dump())

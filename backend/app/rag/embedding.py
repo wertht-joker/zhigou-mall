@@ -1,11 +1,13 @@
-"""本地 Embedding：使用 BGE 模型做文本向量化（离线，免 API）"""
+"""本地 Embedding：使用 BGE 模型做文本向量化（离线，免 API）
+
+sentence_transformers 较重（连带 torch 约 2GB），采用延迟导入：
+模块导入不触发模型库加载，真正调用 embed() 时才需要它已安装。
+"""
 import os
 
 # 国内访问 huggingface.co 会超时，走镜像加速下载
 # 用 setdefault 保证：用户若已设 HF_ENDPOINT 则尊重其配置
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-
-from sentence_transformers import SentenceTransformer
 
 from app.core.config import settings
 
@@ -13,9 +15,16 @@ from app.core.config import settings
 _model = None
 
 
-def _get_model() -> SentenceTransformer:
+def _get_model():
     global _model
     if _model is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise RuntimeError(
+                "未安装 sentence-transformers，无法本地向量化。"
+                "请执行：pip install sentence-transformers（首次会下载 BGE 模型约 400MB）"
+            ) from exc
         # 首次调用会从 HuggingFace 下载模型（约 400MB），国内可设 HF_ENDPOINT 镜像
         _model = SentenceTransformer(
             settings.embedding_model,

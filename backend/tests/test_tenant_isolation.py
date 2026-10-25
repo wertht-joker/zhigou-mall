@@ -70,12 +70,22 @@ def test_login_returns_tenant(client, make_user, tenants):
     assert data["user"]["tenant_id"] == tenants["tenant_a"]
 
 
-def test_register_unknown_tenant_rejected(client):
+def test_merchant_onboarding_creates_tenant(client):
+    """商家入驻：自动创建商家（租户）+ 店铺管理员，店铺编码唯一"""
     resp = client.post(
         f"{BASE}/auth/register",
-        json={"username": "x", "password": "x1", "tenant_code": "no_such"},
+        json={
+            "username": "newshop",
+            "password": "shop123",
+            "register_type": "merchant",
+            "merchant_name": "新入驻的店铺",
+        },
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["user"]["role"] == "admin"
+    assert data["tenant"]["name"] == "新入驻的店铺"
+    assert data["tenant"]["code"].startswith("shop_")
 
 
 def test_documents_isolated_between_tenants(client, user_a, user_b, stub_pipeline):
@@ -122,7 +132,11 @@ def test_cross_tenant_chat_continue_denied(client, user_a, user_b):
 
 def test_retriever_scopes_search_by_tenant(monkeypatch):
     """向量检索必须带 tenant_id 分区过滤 expr"""
+    from app.core.config import settings
     from app.rag import embedding, reranker, retriever, vector_store
+
+    # 关闭检索缓存：本机若在跑 Redis，历史缓存会让向量库调用被跳过，断言失真
+    monkeypatch.setattr(settings, "retrieval_cache_enabled", False)
 
     captured = {}
 

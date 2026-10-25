@@ -2,7 +2,9 @@ import axios from 'axios'
 
 const request = axios.create({ baseURL: '/api/v1' })
 
-export const TOKEN_KEY = 'kb_token'
+export const TOKEN_KEY = 'zg_token'
+export const USER_KEY = 'zg_user'
+export const TENANT_KEY = 'zg_tenant'
 
 // 请求拦截器：自动带 token
 request.interceptors.request.use((config) => {
@@ -13,8 +15,8 @@ request.interceptors.request.use((config) => {
 
 function toLogin() {
   localStorage.removeItem(TOKEN_KEY)
-  localStorage.removeItem('kb_user')
-  localStorage.removeItem('kb_tenant')
+  localStorage.removeItem(USER_KEY)
+  localStorage.removeItem(TENANT_KEY)
   if (window.location.pathname !== '/login') window.location.href = '/login'
 }
 
@@ -38,5 +40,40 @@ request.interceptors.response.use(
     return Promise.reject(new Error(msg))
   },
 )
+
+// ===== 登录态助手 =====
+
+export function saveSession(data) {
+  localStorage.setItem(TOKEN_KEY, data.token)
+  localStorage.setItem(USER_KEY, JSON.stringify(data.user))
+  localStorage.setItem(TENANT_KEY, JSON.stringify(data.tenant))
+}
+
+export function getStoredUser() {
+  try {
+    return JSON.parse(localStorage.getItem(USER_KEY) || 'null')
+  } catch {
+    return null
+  }
+}
+
+export function getStoredTenant() {
+  try {
+    return JSON.parse(localStorage.getItem(TENANT_KEY) || 'null')
+  } catch {
+    return null
+  }
+}
+
+export function isMerchant() {
+  const user = getStoredUser()
+  return !!user && (user.role === 'admin' || user.role === 'editor')
+}
+
+export function clearSession() {
+  localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(USER_KEY)
+  localStorage.removeItem(TENANT_KEY)
+}
 
 export default request

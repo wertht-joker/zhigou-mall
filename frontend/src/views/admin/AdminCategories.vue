@@ -1,7 +1,7 @@
 <template>
   <div class="page">
     <div class="page-header">
-      <h3>🗂️ 分类管理</h3>
+      <h3>🗂️ 知识分类管理</h3>
       <el-button type="primary" @click="openAdd">+ 新增分类</el-button>
     </div>
 
@@ -51,7 +51,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import request from '../api'
+import request from '../../api'
 
 const categories = ref([])
 const loading = ref(false)

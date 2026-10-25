@@ -1,7 +1,7 @@
 <template>
   <div class="page">
     <div class="page-header">
-      <h3>📄 文档管理</h3>
+      <h3>📄 知识库管理（AI 客服知识来源）</h3>
       <div style="display:flex;gap:12px">
         <el-input v-model="keyword" placeholder="搜索文档名称" style="width:240px" clearable @input="loadDocuments" />
         <el-upload :show-file-list="false" :http-request="handleUpload" accept=".pdf,.docx,.xlsx,.md,.txt">
@@ -37,7 +37,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import request from '../api'
+import request from '../../api'
 
 const documents = ref([])
 const loading = ref(false)

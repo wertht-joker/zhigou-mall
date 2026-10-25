@@ -4,7 +4,7 @@ setlocal
 cd /d "%~dp0"
 
 echo ==========================================================
-echo   企业知识库 · 一键启动
+echo   智购商城 · 一键启动
 echo ==========================================================
 
 REM ---------- 1. 启动依赖容器（PostgreSQL / Redis / Milvus）----------
@@ -17,8 +17,9 @@ if errorlevel 1 (
 )
 
 REM ---------- 2. 定位 Python 解释器（绝对路径，避免工作目录影响）----------
-set "PY=%CD%\backend\venv\Scripts\python.exe"
-if not exist "%PY%" set "PY=%CD%\.venv\Scripts\python.exe"
+REM 优先用项目根目录 .venv（PyCharm/日常开发环境），其次 backend\venv
+set "PY=%CD%\.venv\Scripts\python.exe"
+if not exist "%PY%" set "PY=%CD%\backend\venv\Scripts\python.exe"
 if not exist "%PY%" set "PY=python"
 echo [2/4] Python 解释器: %PY%
 
@@ -31,19 +32,19 @@ if not exist "backend\.env" (
 REM ---------- 4. 各开一个窗口启动后端与前端 ----------
 echo [3/4] 启动后端 http://localhost:8000 ...
 pushd "%~dp0backend"
-start "kb-backend" cmd /k "%PY% -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+start "zg-backend" cmd /k "%PY% -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
 popd
 
 echo [4/4] 启动前端 http://localhost:5173 ...
 pushd "%~dp0frontend"
-start "kb-frontend" cmd /k "npm run dev"
+start "zg-frontend" cmd /k "npm run dev"
 popd
 
 echo.
-echo 已启动。后端首次启动约需 20-30 秒（自动跑迁移 + 载体模型加载）。
+echo 已启动。后端首次启动约需 20-30 秒（自动跑迁移 + 写入商城演示数据 + 导入知识库）。
 echo   [- 就绪探针] http://localhost:8000/api/v1/health/ready
 echo   [- 接口文档] http://localhost:8000/docs
 echo   [- 前端页面] http://localhost:5173
-echo   默认账号: admin / admin123（租户编码留空 = 默认租户）
+echo   演示账号: 顾客 demo/demo123  平台管理员 admin/admin123  商家 shop/shop123
 echo.
 pause

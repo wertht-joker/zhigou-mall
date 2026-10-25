@@ -16,6 +16,7 @@ def test_health(client):
 
 
 def test_register_then_login(client):
+    """默认注册为顾客，登录无需租户编码（用户名平台级唯一自动定位）"""
     resp = client.post(f"{BASE}/auth/register", json={"username": "bob", "password": "bob123"})
     assert resp.status_code == 200
     assert resp.json()["code"] == 200
@@ -24,7 +25,8 @@ def test_register_then_login(client):
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["token"]
-    assert data["user"]["role"] == "user"
+    assert data["user"]["role"] == "customer"
+    assert data["tenant"]["name"]
 
 
 def test_login_wrong_password_rejected(client, make_user):

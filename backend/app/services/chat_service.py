@@ -13,22 +13,28 @@ from app.rag import generator
 from app.schemas.chat import ChatResponse, Source
 from app.services import session_service, tools
 
-AGENT_SYSTEM_PROMPT = """你是企业的智能客服助手，可以调用工具获取信息后再回答用户。
+AGENT_SYSTEM_PROMPT = """你是「智购商城」的 AI 智能客服助手，可以调用工具获取信息后再回答用户。
 
 可用工具：
-1. search_knowledge_base —— 检索企业知识库。
-2. query_order —— 按订单号查询订单状态和物流。
+1. search_knowledge_base —— 检索平台知识库（售后政策、退换货流程、物流配送、支付方式、会员积分等）。
+2. query_my_orders —— 查询当前顾客自己的订单状态、物流和商品明细。
+3. recommend_products —— 商品导购，按用户需求推荐在售商品。
 
 要求：
-1. 涉及"规则/流程"类的问题（产品信息、售后政策、退换货流程、物流配送规则、支付方式、
-   会员积分、公司介绍、订单如何查询等），必须先调用 search_knowledge_base 获取资料，
-   只根据检索到的内容回答，不要编造；
+1. 涉及"规则/流程"类的问题（售后政策、退换货流程、物流配送规则、支付方式、会员积分、
+   账号问题等），必须先调用 search_knowledge_base 获取资料，只根据检索到的内容回答，不要编造；
 2. 检索结果中没有答案时，明确回复"未找到相关答案"；
-3. 只有用户提供了**具体订单号**、要查这一单的状态时，才调用 query_order；
-   不要用 query_order 回答规则类问题，也不要凭空猜测订单状态；
-4. 打招呼、闲聊、询问你能做什么这类不需要查资料的问题，可以直接回答；
-5. 回答要简洁、准确、友好；可结合对话历史理解上下文，若用户用了"那这个呢"之类的指代，
-   请自行改写成完整问题后再检索。"""
+3. 用户想查订单（"我买的到哪了""帮我查下单"）时调用 query_my_orders；
+   用户报了订单号就把订单号传给它；用户没报订单号就不传参数查最近的订单；
+   不要用 query_my_orders 回答规则类问题，也不要凭空猜测订单状态；
+4. 用户表达购买意向或询问商品（"有没有…推荐""XX 多少钱""XX 怎么样"）时，
+   调用 recommend_products 查真实在售商品，按返回结果推荐并附上价格，不要编造商品；
+5. 打招呼、闲聊、询问你能做什么这类不需要查资料的问题，可以直接回答；
+6. 回答要简洁、准确、友好，符合电商客服语气；可结合对话历史理解上下文，
+   若用户用了"那这个呢""我的那单"之类的指代，请自行改写成完整问题后再检索；
+7. 输出格式：用短段落和换行分点，重点可用 **加粗** 突出（页面支持加粗渲染），
+   不要用 markdown 标题、表格或代码块；查到订单后先给结论（如"已发货"）再给细节；
+   推荐商品按工具返回的真实商品名列出（前端会同步展示商品卡片，正文只做一两句说明）。"""
 
 
 def _build_messages(history: list, question: str) -> list[dict]:
@@ -41,13 +47,13 @@ def _build_messages(history: list, question: str) -> list[dict]:
 
 
 def _run_agent(messages: list[dict], db: Session, sources: list[dict], direct: list[str],
-               tenant_id: int | None = None):
+               tenant_id: int | None = None, user_id: int | None = None):
     """ReAct 工具调用循环。
 
     每一轮让模型自主决定：调用工具（执行后把结果喂回模型，进入下一轮），
     还是直接给出答案（循环结束）。最多 agent_max_steps 轮，防止模型无限调用工具。
 
-    每执行一次工具就 yield 一条展示文案，供流式接口推给前端；
+    每执行一次工具就 yield 一条 (展示文案, 前端卡片payload)，供流式接口推给前端；
     命中的引用来源就地累加到 sources。
 
     direct：单元素列表。若模型全程没调用任何工具就直接作答（如打招呼），
@@ -72,17 +78,19 @@ def _run_agent(messages: list[dict], db: Session, sources: list[dict], direct: l
         for tc in tool_calls:
             name = tc["function"]["name"]
             args = tools.parse_arguments(tc["function"]["arguments"])
-            yield tools.tool_label(name, args)
+            yield tools.tool_label(name, args), None
 
-            result_text, hit_sources = tools.execute_tool(name, args, db, tenant_id)
-            sources.extend(hit_sources)
+            result = tools.execute_tool(name, args, db, tenant_id, user_id)
+            sources.extend(result.sources)
 
             # 工具结果以 tool 角色喂回模型，供其下一轮推理
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],
-                "content": result_text,
+                "content": result.text,
             })
+            if result.payload:
+                yield result.payload.get("type", ""), result.payload
 
 
 def _dedup_sources(sources: list[dict]) -> list[dict]:
@@ -110,7 +118,7 @@ def _resolve_session(db: Session, question: str, session_id: int | None,
 
 
 def ask(db: Session, question: str, session_id: int | None = None,
-        tenant_id: int | None = None) -> ChatResponse:
+        tenant_id: int | None = None, user_id: int | None = None) -> ChatResponse:
     """问答主流程（Agent 版，一次性返回）"""
     # 1. 处理会话：没传 session_id 则新建
     session_id, history = _resolve_session(db, question, session_id, tenant_id)
@@ -119,7 +127,7 @@ def ask(db: Session, question: str, session_id: int | None = None,
     messages = _build_messages(history, question)
     sources: list[dict] = []
     direct: list[str] = []
-    for _ in _run_agent(messages, db, sources, direct, tenant_id):
+    for _ in _run_agent(messages, db, sources, direct, tenant_id, user_id):
         pass  # 非流式接口不展示中间步骤
 
     # 3. 生成最终答案：模型直接答完了就用它，否则基于工具结果再生成
@@ -138,17 +146,21 @@ def ask(db: Session, question: str, session_id: int | None = None,
 
 
 def ask_stream(db: Session, question: str, session_id: int | None = None,
-               tenant_id: int | None = None):
+               tenant_id: int | None = None, user_id: int | None = None):
     """流式问答：Agent 先自主调用工具，再流式输出答案（SSE 事件生成器）"""
     # 1. 会话处理（校验归属租户）
     session_id, history = _resolve_session(db, question, session_id, tenant_id)
 
-    # 2. Agent 循环：每执行一次工具就推一条 step 事件给前端
+    # 2. Agent 循环：每执行一次工具就推 step 事件，附带结构化卡片 payload
     messages = _build_messages(history, question)
     sources: list[dict] = []
     direct: list[str] = []
-    for label in _run_agent(messages, db, sources, direct, tenant_id):
-        yield f"data: {json.dumps({'type': 'step', 'label': label}, ensure_ascii=False)}\n\n"
+    for label, payload in _run_agent(messages, db, sources, direct, tenant_id, user_id):
+        if payload:
+            # 工具执行完成，推该工具的结构化结果（事件类型 = products / orders）
+            yield f"data: {json.dumps({'type': payload['type'], 'items': payload['items']}, ensure_ascii=False)}\n\n"
+        else:
+            yield f"data: {json.dumps({'type': 'step', 'label': label}, ensure_ascii=False)}\n\n"
 
     # 3. 保存用户消息
     session_service.save_message(db, session_id, "user", question, tenant_id)

@@ -4,10 +4,15 @@
 Base.metadata（Alembic autogenerate 与建表都依赖完整的 metadata）。
 """
 from app.models.database import Base, SessionLocal, engine, get_db
+from app.models.address import Address
+from app.models.cart import CartItem
 from app.models.category import Category
+from app.models.coupon import Coupon
 from app.models.document import Document
 from app.models.feedback import Feedback
-from app.models.order import Order
+from app.models.order import Order, OrderItem
+from app.models.product import Product, ProductCategory
+from app.models.review import Review
 from app.models.session import Message, Session
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -17,10 +22,17 @@ __all__ = [
     "SessionLocal",
     "engine",
     "get_db",
+    "Address",
+    "CartItem",
     "Category",
+    "Coupon",
     "Document",
     "Feedback",
     "Order",
+    "OrderItem",
+    "Product",
+    "ProductCategory",
+    "Review",
     "Message",
     "Session",
     "Tenant",
