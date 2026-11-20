@@ -205,7 +205,8 @@ npm run build:mp-weixin
 2. AppID 可先用测试号；本地联调需在「详情 → 本地设置」勾选**不校验合法域名**
 3. 使用 `demo / demo123` 登录，即可体验首页、商品详情、购物车、结算、订单、AI 客服
 
-> 真机调试把 `miniapp/src/api/config.js` 的 `BASE_URL` 改成电脑局域网 IP；
+> 真机调试无需改源码：复制 `miniapp/.env.example` 为 `miniapp/.env.local`，
+> 把 `VITE_API_BASE` 设为电脑局域网 IP（如 `http://192.168.1.10:8000`）；
 > 正式发布需要 HTTPS 域名、ICP 备案，并在小程序后台配置 request 合法域名。
 
 ---
