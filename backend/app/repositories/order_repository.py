@@ -19,11 +19,30 @@ class OrderRepository(BaseRepository):
     def get_by_order_no(self, order_no: str) -> Order | None:
         return self.db.query(Order).filter(Order.order_no == order_no).first()
 
-    def list_by_user(self, user_id: int, status: str | None = None) -> list[Order]:
+    def _user_query(self, user_id: int, status: str | None = None):
         query = self.db.query(Order).filter(Order.user_id == user_id)
         if status:
             query = query.filter(Order.status == status)
-        return query.order_by(Order.created_at.desc()).all()
+        return query
+
+    def list_by_user(self, user_id: int, status: str | None = None,
+                     offset: int = 0, limit: int | None = None) -> list[Order]:
+        """顾客订单列表；limit 为空表示不分页（AI 查单等内部调用）"""
+        query = self._user_query(user_id, status).order_by(Order.created_at.desc())
+        if limit is not None:
+            query = query.offset(offset).limit(limit)
+        return query.all()
+
+    def count_by_user(self, user_id: int, status: str | None = None) -> int:
+        """顾客订单总数（分页元信息）"""
+        return self._user_query(user_id, status).count()
+
+    def list_all(self, status: str | None = None, limit: int = 100) -> list[Order]:
+        """平台监管：全平台订单（不按顾客/商家过滤）"""
+        query = self.db.query(Order)
+        if status:
+            query = query.filter(Order.status == status)
+        return query.order_by(Order.created_at.desc()).limit(limit).all()
 
     def create(self, **fields) -> Order:
         order = Order(**fields)

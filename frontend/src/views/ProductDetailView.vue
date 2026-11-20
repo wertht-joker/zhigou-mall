@@ -17,26 +17,44 @@
         <div class="price-box">
           <div class="price-line">
             <span class="label">价格</span>
-            <span class="price big">¥{{ product.price }}</span>
-            <span v-if="product.original_price" class="origin">¥{{ product.original_price }}</span>
+            <span class="price big">¥{{ currentPrice }}</span>
+            <span v-if="currentOriginalPrice" class="origin">¥{{ currentOriginalPrice }}</span>
           </div>
           <div class="meta-line">
             <span>销量 {{ product.sales }}</span>
-            <span>库存 {{ product.stock }} 件</span>
+            <span>库存 {{ currentStock }} 件</span>
             <span v-if="product.review_count" class="rate-link" @click="scrollToReviews">
               评分 {{ product.avg_rating }} ★（{{ product.review_count }} 条评价）
             </span>
           </div>
         </div>
 
+        <div v-if="variants.length" class="variant-box">
+          <span class="label">版本</span>
+          <div class="variant-options">
+            <button
+              v-for="v in variants"
+              :key="v.id"
+              type="button"
+              class="variant-chip"
+              :class="{ active: v.id === selectedVariantId, soldout: v.stock <= 0 }"
+              :disabled="v.stock <= 0"
+              @click="selectVariant(v)"
+            >
+              <span class="v-spec">{{ v.spec }}</span>
+              <span class="v-price">¥{{ v.price }}</span>
+            </button>
+          </div>
+        </div>
+
         <div class="buy-box">
           <div class="qty">
             <span class="label">数量</span>
-            <el-input-number v-model="quantity" :min="1" :max="Math.max(product.stock, 1)" />
+            <el-input-number v-model="quantity" :min="1" :max="Math.max(currentStock, 1)" />
           </div>
           <div class="actions">
-            <el-button size="large" plain type="primary" @click="addToCart(false)">🛒 加入购物车</el-button>
-            <el-button size="large" type="primary" @click="addToCart(true)">立即购买</el-button>
+            <el-button size="large" plain type="primary" :disabled="currentStock <= 0" @click="addToCart(false)">🛒 加入购物车</el-button>
+            <el-button size="large" type="primary" :disabled="currentStock <= 0" @click="addToCart(true)">立即购买</el-button>
           </div>
         </div>
 
@@ -60,12 +78,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import request, { TOKEN_KEY } from '../api'
 import ProductReviews from '../components/ProductReviews.vue'
 
+const emit = defineEmits(['cart-updated'])
 const route = useRoute()
 const router = useRouter()
 const product = ref(null)
@@ -74,16 +93,38 @@ const quantity = ref(1)
 const imgFailed = ref(false)
 const reviewsRef = ref(null)
 const reviewsComp = ref(null)
+const selectedVariantId = ref(null)
+
+const variants = computed(() => product.value?.variants || [])
+const selectedVariant = computed(
+  () => variants.value.find((v) => v.id === selectedVariantId.value) || null
+)
+// 有规格时价格/库存跟随所选规格；无规格回退商品自身
+const currentPrice = computed(() => selectedVariant.value?.price ?? product.value?.price ?? 0)
+const currentOriginalPrice = computed(
+  () => selectedVariant.value?.original_price ?? product.value?.original_price
+)
+const currentStock = computed(() => selectedVariant.value?.stock ?? product.value?.stock ?? 0)
 
 onMounted(async () => {
   try {
     product.value = await request.get(`/products/${route.params.id}`)
+    const list = product.value.variants || []
+    if (list.length) {
+      selectedVariantId.value = (list.find((v) => v.stock > 0) || list[0]).id
+    }
   } catch (e) {
     ElMessage.error(e.message)
   } finally {
     loaded.value = true
   }
 })
+
+function selectVariant(variant) {
+  if (variant.stock <= 0) return
+  selectedVariantId.value = variant.id
+  quantity.value = 1
+}
 
 function scrollToReviews() {
   reviewsRef.value?.scrollIntoView({ behavior: 'smooth' })
@@ -93,13 +134,29 @@ async function addToCart(buyNow) {
   if (!localStorage.getItem(TOKEN_KEY)) {
     return router.push({ path: '/login', query: { redirect: route.fullPath } })
   }
+  if (variants.value.length && !selectedVariantId.value) {
+    return ElMessage.warning('请选择商品版本')
+  }
+  if (buyNow) {
+    // 立即购买：不写购物车，直接带商品/规格/数量去结算页
+    return router.push({
+      path: '/checkout',
+      query: {
+        buy_now: '1',
+        product_id: String(product.value.id),
+        variant_id: selectedVariantId.value ? String(selectedVariantId.value) : '',
+        quantity: String(quantity.value),
+      },
+    })
+  }
   try {
-    await request.post('/cart/items', { product_id: product.value.id, quantity: quantity.value })
-    if (buyNow) {
-      router.push('/cart')
-    } else {
-      ElMessage.success('已加入购物车')
-    }
+    await request.post('/cart/items', {
+      product_id: product.value.id,
+      variant_id: selectedVariantId.value,
+      quantity: quantity.value,
+    })
+    emit('cart-updated')
+    ElMessage.success('已加入购物车')
   } catch (e) {
     ElMessage.error(e.message)
   }
@@ -134,6 +191,26 @@ async function addToCart(buyNow) {
 .meta-line { margin-top: 8px; display: flex; gap: 24px; color: #999; font-size: 12px; }
 .rate-link { color: #e1251b; cursor: pointer; }
 .rate-link:hover { text-decoration: underline; }
+
+.variant-box { display: flex; align-items: flex-start; margin-bottom: 20px; }
+.variant-options { display: flex; flex-wrap: wrap; gap: 10px; }
+.variant-chip {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: 8px 14px; border-radius: 12px; cursor: pointer;
+  background: #fff; border: 1.5px solid #eee;
+  transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
+  font-family: inherit;
+}
+.variant-chip:hover:not(.soldout) { border-color: #ffb4a8; transform: translateY(-1px); }
+.variant-chip.active {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  box-shadow: 0 6px 16px rgba(255, 77, 79, .14);
+}
+.variant-chip.soldout { color: #ccc; cursor: not-allowed; background: #fafafa; }
+.v-spec { font-size: 13px; font-weight: 600; }
+.v-price { font-size: 12px; color: var(--brand); }
+.variant-chip.soldout .v-price { color: #ccc; }
 
 .qty { display: flex; align-items: center; margin-bottom: 20px; }
 .actions { display: flex; gap: 12px; }

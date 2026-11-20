@@ -13,14 +13,15 @@
             <div class="item-pic">{{ item.product?.image || '📦' }}</div>
             <div class="item-info" @click="goDetail(item)">
               <div class="item-name">{{ item.product?.name || '（商品已失效）' }}</div>
+              <div v-if="item.variant" class="item-spec">版本：{{ item.variant.spec }}</div>
               <div class="item-sub">{{ item.product?.subtitle }}</div>
             </div>
-            <div class="item-price price">¥{{ item.product?.price ?? '-' }}</div>
+            <div class="item-price price">¥{{ priceOf(item) }}</div>
             <el-input-number
               v-if="item.product"
               v-model="item.quantity"
               :min="1"
-              :max="Math.max(item.product.stock, 1)"
+              :max="Math.max(stockOf(item), 1)"
               size="small"
               @change="changeQty(item)"
             />
@@ -51,6 +52,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '../api'
 
+const emit = defineEmits(['cart-updated'])
 const router = useRouter()
 const items = ref([])
 
@@ -58,8 +60,17 @@ const checkedCount = computed(() => items.value.filter((i) => i.checked && i.pro
 const total = computed(() =>
   items.value
     .filter((i) => i.checked && i.product)
-    .reduce((sum, i) => sum + i.product.price * i.quantity, 0)
+    .reduce((sum, i) => sum + priceOf(i) * i.quantity, 0)
 )
+
+// 后端已按规格返回成交单价与可购库存
+function priceOf(item) {
+  return item.unit_price ?? item.variant?.price ?? item.product?.price ?? 0
+}
+
+function stockOf(item) {
+  return item.stock ?? item.variant?.stock ?? item.product?.stock ?? 0
+}
 
 function refreshTotal() { /* checked 变化由 computed 自动响应 */ }
 
@@ -79,6 +90,7 @@ async function changeQty(item) {
   try {
     const fresh = await request.put(`/cart/items/${item.id}`, { quantity: item.quantity })
     syncItem(item, fresh)
+    emit('cart-updated')
   } catch (e) {
     ElMessage.error(e.message)
     loadCart()
@@ -89,6 +101,7 @@ async function removeItem(item) {
   try {
     const fresh = await request.request({ method: 'DELETE', url: '/cart/items', data: [item.id] })
     items.value = fresh.map((i) => ({ ...i, checked: i.checked ?? true }))
+    emit('cart-updated')
   } catch (e) {
     ElMessage.error(e.message)
   }
@@ -99,6 +112,7 @@ async function clearAll() {
   try {
     await request.request({ method: 'DELETE', url: '/cart/items', data: null })
     items.value = []
+    emit('cart-updated')
   } catch (e) {
     ElMessage.error(e.message)
   }
@@ -132,6 +146,10 @@ onMounted(loadCart)
 .item-info { flex: 1; cursor: pointer; min-width: 0; }
 .item-name { font-size: 14px; }
 .item-name:hover { color: #e1251b; }
+.item-spec {
+  display: inline-block; margin-top: 4px; padding: 1px 8px;
+  font-size: 12px; color: #666; background: #f5f5f7; border-radius: 999px;
+}
 .item-sub { font-size: 12px; color: #999; margin-top: 4px; }
 .item-price { width: 90px; font-size: 16px; }
 

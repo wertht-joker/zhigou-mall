@@ -69,6 +69,33 @@ def cache_set(key: str, value: str, ttl: int | None = None) -> None:
         pass
 
 
+# 知识库内容版本：文档上传/删除时递增，检索缓存键带上它，
+# 避免文档更新后 TTL 内继续返回旧政策（方向 C 的缓存失效前置修复）。
+_KB_VERSION_KEY = "kb:content_version"
+
+
+def get_kb_version() -> str:
+    """返回当前知识库内容版本；Redis 不可用时返回 "0"（缓存本身也会降级）"""
+    client = get_client()
+    if not client:
+        return "0"
+    try:
+        return client.get(_KB_VERSION_KEY) or "0"
+    except Exception:
+        return "0"
+
+
+def bump_kb_version() -> None:
+    """知识库内容变化时递增版本；失败不影响主流程"""
+    client = get_client()
+    if not client:
+        return
+    try:
+        client.incr(_KB_VERSION_KEY)
+    except Exception:
+        pass
+
+
 def eval_script(script: str, keys: list[str], args: list) -> int | None:
     """执行 Lua 脚本（限流用）；Redis 不可用时返回 None，由调用方降级"""
     client = get_client()

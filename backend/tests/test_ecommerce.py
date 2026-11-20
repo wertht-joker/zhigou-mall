@@ -114,15 +114,29 @@ def address_id(client, buyer_token):
 def test_public_product_list(client, shop):
     resp = client.get(f"{BASE}/products")
     assert resp.status_code == 200
-    names = [p["name"] for p in resp.json()["data"]]
+    data = resp.json()["data"]
+    names = [p["name"] for p in data["items"]]
     assert "测试降噪耳机" in names
     assert "测试下架商品" not in names  # 下架商品前台不可见
+    assert data["total"] >= len(data["items"])
+    assert data["page"] == 1
 
 
 def test_public_product_list_keyword(client, shop):
     resp = client.get(f"{BASE}/products", params={"keyword": "耳机"})
-    names = [p["name"] for p in resp.json()["data"]]
+    names = [p["name"] for p in resp.json()["data"]["items"]]
     assert names == ["测试降噪耳机"]
+
+
+def test_public_product_list_pagination(client, shop):
+    resp = client.get(
+        f"{BASE}/products", params={"page": 1, "page_size": 1}
+    )
+    data = resp.json()["data"]
+    assert data["page"] == 1
+    assert data["page_size"] == 1
+    assert len(data["items"]) == 1
+    assert data["total"] >= 2
 
 
 def test_public_product_detail(client, shop):
@@ -212,12 +226,50 @@ def test_order_full_lifecycle(client, buyer_token, seller_token, shop, address_i
         json={"logistics": "顺丰速运 SF0001112223"},
     )
     assert resp.status_code == 200
-    assert resp.json()["data"]["status"] == "已发货"
+    shipped = resp.json()["data"]
+    assert shipped["status"] == "已发货"
+    assert shipped["logistics_company"] == "顺丰速运"
+    assert shipped["tracking_no"] == "SF0001112223"
+    assert shipped["logistics_status"] == "已发货"
+    assert shipped["estimated_delivery_at"]
+    # 发货瞬间只有「已发货」节点已经发生，后续节点按时间逐步可见
+    assert len(shipped["logistics_events"]) == 1
+    assert shipped["logistics_events"][0]["status"] == "已发货"
+
+    # 商家手动推进物流状态：运输中
+    resp = client.post(
+        f"{BASE}/merchant/orders/{order['id']}/logistics-events",
+        headers=seller_token,
+        json={"status": "运输中", "location": "杭州转运中心"},
+    )
+    assert resp.status_code == 200, resp.text
+    advanced = resp.json()["data"]
+    assert advanced["logistics_status"] == "运输中"
+    assert advanced["logistics_events"][0]["status"] == "运输中"
+    assert advanced["logistics_events"][0]["location"] == "杭州转运中心"
+
+    # 不允许回退到已揽收
+    resp = client.post(
+        f"{BASE}/merchant/orders/{order['id']}/logistics-events",
+        headers=seller_token,
+        json={"status": "已揽收"},
+    )
+    assert resp.status_code == 400
+
+    # 继续推进到已签收
+    resp = client.post(
+        f"{BASE}/merchant/orders/{order['id']}/logistics-events",
+        headers=seller_token,
+        json={"status": "已签收"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["logistics_status"] == "已签收"
 
     # 顾客确认收货 → 已完成
     resp = client.post(f"{BASE}/orders/{order['id']}/confirm", headers=buyer_token)
     assert resp.json()["data"]["status"] == "已完成"
     assert resp.json()["data"]["logistics"] == "顺丰速运 SF0001112223"
+    assert resp.json()["data"]["logistics_events"]
 
 
 def test_order_cancel_restores_stock(client, buyer_token, shop, address_id, engine):

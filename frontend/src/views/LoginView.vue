@@ -23,13 +23,14 @@
         <el-form-item>
           <el-input v-model="form.password" type="password" placeholder="密码" show-password @keyup.enter="submit" />
         </el-form-item>
-        <el-button type="primary" style="width:100%" :loading="loading" @click="submit">
+        <el-button type="primary" size="large" class="login-submit" :loading="loading" @click="submit">
           {{ tab === 'login' ? '登录' : (registerType === 'merchant' ? '入驻并登录' : '注册并登录') }}
         </el-button>
       </el-form>
 
       <div class="login-tip">
-        演示账号：顾客 demo / demo123 · 平台管理员 admin / admin123 · 商家 shop / shop123
+        演示账号：顾客 demo / demo123 · 平台管理员 admin / admin123<br />
+        自营店长 self / self123 · 第三方商家 shop / shop123
       </div>
     </div>
   </div>
@@ -39,7 +40,7 @@
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
-import request, { saveSession } from '../api'
+import request, { saveSession, isMerchant, isPlatformAdmin } from '../api'
 
 const route = useRoute()
 const router = useRouter()
@@ -61,7 +62,18 @@ async function submit() {
       })
       saveSession(data)
       ElMessage.success(`欢迎回来，${data.user.username}`)
-      router.push(route.query.redirect || '/')
+      // 平台管理员进平台后台；商家进商家后台；顾客回商城
+      if (isPlatformAdmin()) {
+        router.push('/platform/dashboard')
+      } else if (isMerchant()) {
+        const redirect = route.query.redirect
+        const target = typeof redirect === 'string' && redirect.startsWith('/admin')
+          ? redirect
+          : '/admin/products'
+        router.push(target)
+      } else {
+        router.push(route.query.redirect || '/')
+      }
     } else {
       const payload = { username: form.value.username, password: form.value.password }
       if (registerType.value === 'merchant') {
@@ -79,7 +91,8 @@ async function submit() {
           ? `入驻成功！店铺编码 ${data.tenant.code}`
           : '注册成功'
       )
-      router.push('/')
+      // 商家入驻后直接进商家后台
+      router.push(registerType.value === 'merchant' ? '/admin/products' : '/')
     }
   } catch (e) {
     ElMessage.error(e.message)
@@ -100,6 +113,7 @@ async function submit() {
 }
 .login-logo { text-align: center; font-size: 22px; font-weight: bold; color: #e1251b; margin-bottom: 16px; }
 .login-logo span { font-size: 26px; margin-right: 4px; }
+.login-submit { width: 100%; height: 46px; font-size: 16px; font-weight: 600; }
 .role-switch { width: 100%; margin-bottom: 16px; display: flex; }
 .role-switch :deep(.el-radio-button) { flex: 1; }
 .role-switch :deep(.el-radio-button__inner) { width: 100%; }

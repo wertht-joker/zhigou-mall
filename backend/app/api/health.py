@@ -6,7 +6,7 @@
 from fastapi import APIRouter
 from sqlalchemy import text
 
-from app.core.config import settings
+from app.core.config import deepseek_key_status, settings
 from app.core.errors import ServiceUnavailableError
 from app.core.response import success
 
@@ -45,17 +45,24 @@ def _check_milvus() -> bool:
 
 def _check_llm() -> bool:
     """大模型是否已配置（未配置不算依赖故障，仅提示）"""
-    return bool(settings.deepseek_api_key)
+    return deepseek_key_status()[0]
 
 
 @router.get("/health")
 def health():
     """存活探针：返回服务状态与配置概况"""
+    llm_ok, llm_hint = deepseek_key_status()
     return success({
         "app": settings.app_name,
-        "deepseek_configured": bool(settings.deepseek_api_key),
+        "deepseek_configured": llm_ok,
+        "deepseek_config_hint": llm_hint,
         "deepseek_model": settings.deepseek_model,
-        "milvus": f"{settings.milvus_host}:{settings.milvus_port}",
+        "vector_backend": settings.vector_backend,
+        "vector_store": (
+            f"sqlite:{settings.vector_db_path}"
+            if (settings.vector_backend or "").lower() != "milvus"
+            else f"milvus:{settings.milvus_host}:{settings.milvus_port}"
+        ),
         "embedding_model": settings.embedding_model,
         "top_k": settings.top_k,
     })
@@ -76,3 +83,11 @@ def readiness():
     if not payload["ready"]:
         raise ServiceUnavailableError("依赖组件未就绪", data=payload)
     return success(payload)
+
+
+@router.get("/metrics/retrieval")
+def retrieval_metrics():
+    """方向 D 观测：检索策略分布、缓存命中率、P50/P95 延迟"""
+    from app.rag import metrics
+
+    return success(metrics.snapshot())

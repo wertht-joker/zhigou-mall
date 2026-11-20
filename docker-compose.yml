@@ -111,6 +111,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       MILVUS_HOST: milvus
       MILVUS_PORT: "19530"
+      # 容器化部署仍走 Milvus；本地直接跑默认用内嵌 SQLite 向量库
+      VECTOR_BACKEND: milvus
       LOG_JSON: "true"
       # 推理只跑 CPU，容器内不下载 GPU 相关依赖
       EMBEDDING_DEVICE: cpu

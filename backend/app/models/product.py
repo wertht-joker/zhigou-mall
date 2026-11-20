@@ -1,7 +1,7 @@
 """商品与商品分类模型"""
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Index, Integer, String, Text
+from sqlalchemy import DateTime, Float, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.database import Base
@@ -53,4 +53,27 @@ class Product(Base):
     image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # 状态：on_sale 在售 / off_sale 下架
     status: Mapped[str] = mapped_column(String(20), default="on_sale")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class ProductVariant(Base):
+    """商品规格/SKU（如手机 128G / 256G，各自独立价格与库存）
+
+    有规格的商品：Product.price 取最低规格价用于列表展示，
+    Product.stock 为各规格库存之和；下单时按具体规格计价并扣减规格库存。
+    """
+
+    __tablename__ = "product_variants"
+    __table_args__ = (
+        UniqueConstraint("product_id", "spec", name="uq_product_variants_spec"),
+        Index("ix_product_variants_product", "product_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 规格名（如 "16GB+512GB 曜石黑"）
+    spec: Mapped[str] = mapped_column(String(100), nullable=False)
+    price: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    original_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stock: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)

@@ -47,6 +47,8 @@ import request, { TOKEN_KEY } from '../api'
 const router = useRouter()
 
 // 倒计时目标：今年的 11 月 11 日 0 点，若已过则顺延到明年
+// （用 Date 构造器传本地时区年月日，而不是解析 "2026-11-11" 字符串 ——
+//   后者在部分环境按 UTC 解析，会有 8 小时时区坑）
 const target = (() => {
   const now = new Date()
   let t = new Date(now.getFullYear(), 10, 11, 0, 0, 0)
@@ -77,6 +79,9 @@ async function loadClaimed() {
 }
 
 async function claim(c) {
+  // 已领判断（UI 层）+ 未登录引导 —— 真正的"每档限领一张"由后端判重兜底：
+  // 前端状态只是体验优化，服务端 find_by_tier 才是防线（前端数据不可信），
+  // 重复领取会被后端 400 拒绝并在 catch 里 toast 出来。
   if (claimed.value.includes(c.threshold)) return
   if (!localStorage.getItem(TOKEN_KEY)) {
     ElMessage.warning('请先登录后领券')

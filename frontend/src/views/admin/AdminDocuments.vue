@@ -10,9 +10,33 @@
       </div>
     </div>
 
+    <div class="version-bar">
+      <el-input v-model="policyKey" placeholder="政策标识（可选，如 return_policy）" style="width:240px" clearable />
+      <el-input v-model="version" placeholder="版本（可空，自动递增）" style="width:170px" clearable />
+      <el-date-picker v-model="effectiveFrom" type="datetime" placeholder="生效时间（可空）"
+        value-format="YYYY-MM-DDTHH:mm:ss" style="width:190px" />
+      <span class="version-sep">至</span>
+      <el-date-picker v-model="effectiveTo" type="datetime" placeholder="失效时间（可空）"
+        value-format="YYYY-MM-DDTHH:mm:ss" style="width:190px" />
+    </div>
+
     <el-table :data="documents" v-loading="loading" border stripe>
       <el-table-column prop="id" label="ID" width="70" />
       <el-table-column prop="name" label="文档名称" />
+      <el-table-column label="政策版本" width="170">
+        <template #default="{ row }">
+          <span v-if="row.policy_key">{{ row.policy_key }} · v{{ row.version }}</span>
+          <span v-else class="muted">普通文档</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="生效期" width="220">
+        <template #default="{ row }">
+          <span v-if="row.effective_from || row.effective_to">
+            {{ formatTime(row.effective_from) || '—' }} ~ {{ formatTime(row.effective_to) || '长期' }}
+          </span>
+          <span v-else class="muted">长期有效</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="type" label="格式" width="80" />
       <el-table-column prop="chunk_count" label="切分块数" width="100" />
       <el-table-column prop="status" label="状态" width="100">
@@ -42,6 +66,10 @@ import request from '../../api'
 const documents = ref([])
 const loading = ref(false)
 const keyword = ref('')
+const policyKey = ref('')
+const version = ref('')
+const effectiveFrom = ref('')
+const effectiveTo = ref('')
 
 async function loadDocuments() {
   loading.value = true
@@ -57,6 +85,10 @@ async function loadDocuments() {
 async function handleUpload(options) {
   const formData = new FormData()
   formData.append('file', options.file)
+  if (policyKey.value) formData.append('policy_key', policyKey.value)
+  if (version.value) formData.append('version', version.value)
+  if (effectiveFrom.value) formData.append('effective_from', effectiveFrom.value)
+  if (effectiveTo.value) formData.append('effective_to', effectiveTo.value)
   try {
     const data = await request.post('/documents/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
@@ -92,5 +124,8 @@ onMounted(loadDocuments)
 
 <style scoped>
 .page { padding: 20px; }
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.version-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+.version-sep { color: #909399; font-size: 12px; }
+.muted { color: #909399; font-size: 12px; }
 </style>

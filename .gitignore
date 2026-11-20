@@ -40,3 +40,6 @@ frontend/dist/
 # ===== IDE / 临时文件 =====
 .trae/
 lark_qr.png
+
+# ===== 答辩材料归档 =====
+_archive/

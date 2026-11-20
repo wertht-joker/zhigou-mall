@@ -120,43 +120,51 @@ function onRegionChange(codes) {
   form.region = labels.length >= 2 && labels[0] === labels[1] ? labels[0] : labels.join(' ')
 }
 
-/** 浏览器定位 → OpenStreetMap 逆地理编码，回填省市区与详细地址 */
+/** 浏览器定位 → 后端逆地理编码代理（Photon + BigDataCloud），回填省市区与详细地址 */
 async function locate() {
   if (!navigator.geolocation) {
     return ElMessage.warning('当前浏览器不支持定位')
   }
   locating.value = true
-  const finish = () => { locating.value = false }
   navigator.geolocation.getCurrentPosition(
     async (pos) => {
       try {
         const { latitude, longitude } = pos.coords
-        const resp = await fetch(
-          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=17&accept-language=zh-CN`,
-        )
-        const data = await resp.json()
-        const a = data.address || {}
-        const province = a.state || a.province || ''
-        const city = a.city || a.town || province
-        const district = a.city_district || a.suburb || a.district || a.county || ''
-        const road = a.road || a.pedestrian || a.neighbourhood || ''
-        const house = a.house_number || ''
-
-        // 逐级匹配省市区编码
-        regionCodes.value = matchCodes([province, city, district].filter(Boolean).join(' '))
-        form.region = [province, city === province ? '' : city, district].filter(Boolean).join(' ')
-        const tail = [road, house].filter(Boolean).join('')
+        const data = await request.get('/geo/reverse', {
+          params: { lat: latitude, lon: longitude },
+        })
+        // 后端返回标准 6 位行政区划编码；级联组件按「省 2 位 / 市 4 位 / 区 6 位」
+        // 组织，这里按层级截断后再校验是否存在，避免整段编码匹配失败
+        const widths = [2, 4, 6]
+        const codes = (data.region_codes || [])
+          .map((code, idx) => String(code).replace(/\D/g, '').slice(0, widths[idx]))
+          .filter((code) => codeToText[code])
+        if (codes.length) {
+          regionCodes.value = codes
+          onRegionChange(codes)
+        } else {
+          const parts = data.region_parts || []
+          regionCodes.value = matchCodes(parts.join(' '))
+          if (regionCodes.value.length) onRegionChange(regionCodes.value)
+          else form.region = parts.join(' ')
+        }
+        const tail = (data.detail || '').trim()
         if (tail) form.detail = form.detail ? `${form.detail}（${tail}）` : tail
         ElMessage.success(`已定位到${form.region || '当前位置'}，请补全详细地址`)
       } catch (e) {
-        ElMessage.error('定位解析失败，请手动选择所在地区')
+        ElMessage.error(e.message || '定位解析失败，请手动选择所在地区')
       } finally {
-        finish()
+        locating.value = false
       }
     },
-    () => {
-      finish()
-      ElMessage.warning('定位失败或被拒绝，请手动选择所在地区')
+    (err) => {
+      locating.value = false
+      const hints = {
+        1: '定位权限被拒绝，请在浏览器允许定位后重试',
+        2: '无法获取当前位置，请检查系统定位服务',
+        3: '定位超时，请重试或手动选择所在地区',
+      }
+      ElMessage.warning(hints[err.code] || '定位失败，请手动选择所在地区')
     },
     { enableHighAccuracy: false, timeout: 10000 },
   )

@@ -24,6 +24,17 @@ from app.models.database import get_db as real_get_db
 STUB_ANSWER = "这是测试用的固定回答。"
 
 
+@pytest.fixture(autouse=True)
+def _reset_rag_state():
+    """每个用例前清空进程内语义缓存与检索指标，避免用例间相互污染"""
+    from app.rag import metrics, semantic_cache
+
+    semantic_cache.clear_local()
+    metrics.reset()
+    yield
+    semantic_cache.clear_local()
+
+
 @pytest.fixture
 def engine():
     """一份被多线程共享的内存 SQLite（StaticPool 保证连接复用）"""
@@ -133,9 +144,16 @@ def _login(client, username: str, password: str, tenant_code: str | None = None)
 
 @pytest.fixture
 def admin_token(client, make_user):
-    """管理员登录态，返回请求头"""
+    """商家管理员登录态，返回请求头"""
     make_user("admin", "admin123", "admin")
     return {"Authorization": "Bearer " + _login(client, "admin", "admin123")}
+
+
+@pytest.fixture
+def platform_token(client, make_user):
+    """平台管理员登录态，返回请求头"""
+    make_user("platform", "platform123", "platform_admin")
+    return {"Authorization": "Bearer " + _login(client, "platform", "platform123")}
 
 
 @pytest.fixture

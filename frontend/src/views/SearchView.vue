@@ -3,9 +3,9 @@
     <div class="filter-bar">
       <span class="result-tip">
         {{ keyword ? `“${keyword}” 的搜索结果` : '全部商品' }}
-        <em>共 {{ products.length }} 件</em>
+        <em>共 {{ total }} 件</em>
       </span>
-      <el-radio-group v-model="activeCategory" size="small" @change="loadProducts">
+      <el-radio-group v-model="activeCategory" size="small" @change="reload">
         <el-radio-button :value="null">全部</el-radio-button>
         <el-radio-button v-for="c in categories" :key="c.id" :value="c.id">
           {{ c.icon }} {{ c.name }}
@@ -17,6 +17,17 @@
       <ProductCard v-for="p in products" :key="p.id" :product="p" />
     </div>
     <el-empty v-if="!loading && products.length === 0" description="没有找到相关商品，换个关键词试试？" />
+
+    <div v-if="total > pageSize" class="search-pager">
+      <el-pagination
+        background
+        layout="prev, pager, next"
+        :total="total"
+        :page-size="pageSize"
+        :current-page="page"
+        @current-change="onPageChange"
+      />
+    </div>
   </div>
 </template>
 
@@ -32,6 +43,9 @@ const categories = ref([])
 const activeCategory = ref(null)
 const products = ref([])
 const loading = ref(false)
+const page = ref(1)
+const pageSize = 12
+const total = ref(0)
 
 async function loadCategories() {
   try { categories.value = await request.get('/product-categories') } catch (e) { /* 忽略 */ }
@@ -40,20 +54,34 @@ async function loadCategories() {
 async function loadProducts() {
   loading.value = true
   try {
-    products.value = await request.get('/products', {
+    const data = await request.get('/products', {
       params: {
         keyword: keyword.value || undefined,
         category_id: activeCategory.value || undefined,
+        page: page.value,
+        page_size: pageSize,
       },
     })
+    products.value = data.items || []
+    total.value = data.total || 0
   } catch (e) { /* 忽略 */ } finally {
     loading.value = false
   }
 }
 
+function reload() {
+  page.value = 1
+  loadProducts()
+}
+
+function onPageChange(next) {
+  page.value = next
+  loadProducts()
+}
+
 watch(() => route.query.q, (q) => {
   keyword.value = q || ''
-  loadProducts()
+  reload()
 })
 
 onMounted(() => {
@@ -70,6 +98,7 @@ onMounted(() => {
 .result-tip { font-size: 14px; }
 .result-tip em { font-style: normal; color: #999; margin-left: 8px; font-size: 12px; }
 .product-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+.search-pager { display: flex; justify-content: center; margin-top: 22px; }
 @media (max-width: 1100px) { .product-grid { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 700px) { .product-grid { grid-template-columns: repeat(2, 1fr); } }
 </style>

@@ -25,14 +25,15 @@
     <!-- 商品清单 -->
     <div class="section">
       <h3>🧾 商品清单</h3>
-      <div v-for="i in orderItems" :key="i.id" class="order-item">
+      <div v-for="i in orderItems" :key="i.id ?? i.product?.id" class="order-item">
         <div class="oi-pic">{{ i.product?.image || '📦' }}</div>
         <div class="oi-info">
           <div>{{ i.product?.name }}</div>
+          <div v-if="i.variant" class="oi-spec">版本：{{ i.variant.spec }}</div>
           <div class="oi-sub">{{ i.product?.subtitle }}</div>
         </div>
-        <div>¥{{ i.product?.price }} × {{ i.quantity }}</div>
-        <div class="price oi-total">¥{{ ((i.product?.price || 0) * i.quantity).toFixed(2) }}</div>
+        <div>¥{{ priceOf(i) }} × {{ i.quantity }}</div>
+        <div class="price oi-total">¥{{ (priceOf(i) * i.quantity).toFixed(2) }}</div>
       </div>
     </div>
 
@@ -79,6 +80,7 @@ import { ElMessage } from 'element-plus'
 import request from '../api'
 import AddressFormDialog from '../components/AddressFormDialog.vue'
 
+const emit = defineEmits(['cart-updated'])
 const route = useRoute()
 const router = useRouter()
 
@@ -90,18 +92,28 @@ const addrDialog = ref(false)
 const myCoupons = ref([])
 const selectedCouponId = ref(0)
 
+// 立即购买模式：绕过购物车，直接结算单个商品
+const buyNow = computed(() => route.query.buy_now === '1')
+const buyNowItem = ref(null)
+
 // 勾选的购物车条目（从购物车页带过来；空则默认全部）
 const wantedIds = computed(() =>
   (route.query.items || '').split(',').filter(Boolean).map(Number)
 )
-const orderItems = computed(() =>
-  wantedIds.value.length
+const orderItems = computed(() => {
+  if (buyNow.value) return buyNowItem.value ? [buyNowItem.value] : []
+  return wantedIds.value.length
     ? cartItems.value.filter((i) => wantedIds.value.includes(i.id) && i.product)
     : cartItems.value.filter((i) => i.product)
-)
+})
 const total = computed(() =>
-  orderItems.value.reduce((sum, i) => sum + i.product.price * i.quantity, 0)
+  orderItems.value.reduce((sum, i) => sum + priceOf(i) * i.quantity, 0)
 )
+
+// 后端购物车条目已按规格返回成交单价
+function priceOf(item) {
+  return item.unit_price ?? item.variant?.price ?? item.product?.price ?? 0
+}
 
 // 可用券：未使用且门槛不超过当前金额；金额变化导致不满足时自动失效
 const usableCoupons = computed(() =>
@@ -113,16 +125,36 @@ const activeCoupon = computed(() =>
 const discount = computed(() => activeCoupon.value?.discount ?? 0)
 const finalTotal = computed(() => Math.max(total.value - discount.value, 0))
 
+async function loadBuyNowItem() {
+  const productId = Number(route.query.product_id)
+  if (!productId) return
+  const product = await request.get(`/products/${productId}`)
+  const variantId = route.query.variant_id ? Number(route.query.variant_id) : null
+  const variant = (product.variants || []).find((v) => v.id === variantId) || null
+  const quantity = Number(route.query.quantity) || 1
+  buyNowItem.value = {
+    id: null,
+    product,
+    variant,
+    quantity,
+    unit_price: variant ? variant.price : product.price,
+    stock: variant ? variant.stock : product.stock,
+  }
+}
+
 async function load() {
   try {
-    const [addrs, cart, coupons] = await Promise.all([
+    const [addrs, coupons] = await Promise.all([
       request.get('/addresses'),
-      request.get('/cart'),
       request.get('/coupons'),
     ])
     addresses.value = addrs
-    cartItems.value = cart
     myCoupons.value = coupons
+    if (buyNow.value) {
+      await loadBuyNowItem()
+    } else {
+      cartItems.value = await request.get('/cart')
+    }
     if (addrs.length) {
       selectedAddress.value = (addrs.find((a) => a.is_default) || addrs[0]).id
     }
@@ -144,16 +176,28 @@ async function onAddressSaved() {
 async function submitOrder() {
   submitting.value = true
   try {
-    const order = await request.post('/orders', {
+    const payload = {
       address_id: selectedAddress.value,
-      cart_item_ids: wantedIds.value.length ? wantedIds.value : orderItems.value.map((i) => i.id),
       coupon_id: activeCoupon.value?.id || null,
-    })
+    }
+    if (buyNow.value) {
+      payload.buy_now = {
+        product_id: buyNowItem.value.product.id,
+        variant_id: buyNowItem.value.variant?.id ?? null,
+        quantity: buyNowItem.value.quantity,
+      }
+    } else {
+      payload.cart_item_ids = wantedIds.value.length
+        ? wantedIds.value
+        : orderItems.value.map((i) => i.id)
+    }
+    const order = await request.post('/orders', payload)
     ElMessage.success(
       discount.value > 0
         ? `下单成功！订单号 ${order.order_no}（券已抵扣 ¥${discount.value.toFixed(2)}）`
         : `下单成功！订单号 ${order.order_no}`
     )
+    if (!buyNow.value) emit('cart-updated')
     router.push('/orders')
   } catch (e) {
     ElMessage.error(e.message)
@@ -194,6 +238,10 @@ onMounted(load)
   background: #faf6f5; display: flex; align-items: center; justify-content: center;
 }
 .oi-info { flex: 1; }
+.oi-spec {
+  display: inline-block; margin-top: 4px; padding: 1px 8px;
+  font-size: 12px; color: #666; background: #f5f5f7; border-radius: 999px;
+}
 .oi-sub { font-size: 12px; color: #999; margin-top: 4px; }
 .oi-total { width: 90px; text-align: right; }
 

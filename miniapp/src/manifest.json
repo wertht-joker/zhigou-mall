@@ -1,0 +1,28 @@
+{
+  "name": "智购商城",
+  "appid": "__UNI__ZHIGOU",
+  "description": "智购商城微信小程序",
+  "versionName": "1.0.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "app-plus": {
+    "usingComponents": true,
+    "nvueStyleCompiler": "uni-app",
+    "compilerVersion": 3
+  },
+  "mp-weixin": {
+    "appid": "",
+    "setting": {
+      "urlCheck": false,
+      "es6": true,
+      "minified": true
+    },
+    "usingComponents": true
+  },
+  "h5": {
+    "title": "智购商城",
+    "router": {
+      "base": "/"
+    }
+  }
+}

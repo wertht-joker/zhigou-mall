@@ -163,10 +163,10 @@ def test_retriever_scopes_search_by_tenant(monkeypatch):
     assert hits and hits[0]["doc_id"] == 1
 
 
-def test_tenants_endpoint_requires_admin(client, user_token, admin_token, tenants):
-    """租户列表仅管理员可访问"""
+def test_tenants_endpoint_requires_platform_admin(client, user_token, platform_token, tenants):
+    """租户列表仅平台管理员可访问"""
     assert client.get(f"{BASE}/tenants").status_code == 401
     assert client.get(f"{BASE}/tenants", headers=user_token).status_code == 403
-    resp = client.get(f"{BASE}/tenants", headers=admin_token)
+    resp = client.get(f"{BASE}/tenants", headers=platform_token)
     assert resp.status_code == 200
     assert len(resp.json()["data"]) >= 1

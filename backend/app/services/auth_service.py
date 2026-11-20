@@ -4,6 +4,7 @@
 由全局异常处理器统一转成 HTTP 状态码 + 统一响应。
 
 电商角色模型：
+- platform_admin 平台管理员：管理商家与平台分类，不归属任何店铺
 - customer 顾客：逛商城、下单，归属平台默认租户
 - admin/editor：商家（租户）管理员/运营，管理本店商品与知识库
 """
@@ -78,10 +79,15 @@ def login(db: Session, username: str, password: str,
         raise AuthError("用户名或密码错误")
 
     if tenant is None:
+        # 平台管理员不归属任何店铺，登录后直接进平台后台
+        if user.role == "platform_admin":
+            return user, None
         from app.services import tenant_service
         tenant = (
             tenant_service.get(db, user.tenant_id)
             if user.tenant_id
             else tenant_service.ensure_default_tenant(db)
         )
+    if tenant.status != "active":
+        raise AuthError("店铺已停用，请联系平台管理员")
     return user, tenant

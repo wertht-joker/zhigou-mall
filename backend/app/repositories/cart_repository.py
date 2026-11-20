@@ -26,15 +26,25 @@ class CartRepository(BaseRepository):
             .first()
         )
 
-    def get_by_product(self, user_id: int, product_id: int) -> CartItem | None:
-        return (
-            self.db.query(CartItem)
-            .filter(CartItem.user_id == user_id, CartItem.product_id == product_id)
-            .first()
+    def get_by_variant(self, user_id: int, product_id: int,
+                       variant_id: int | None) -> CartItem | None:
+        """按「商品 + 规格」定位购物车条目（无规格商品 variant_id 为 None）"""
+        query = self.db.query(CartItem).filter(
+            CartItem.user_id == user_id,
+            CartItem.product_id == product_id,
         )
+        if variant_id is None:
+            query = query.filter(CartItem.variant_id.is_(None))
+        else:
+            query = query.filter(CartItem.variant_id == variant_id)
+        return query.first()
 
-    def add(self, user_id: int, product_id: int, quantity: int) -> CartItem:
-        item = CartItem(user_id=user_id, product_id=product_id, quantity=quantity)
+    def add(self, user_id: int, product_id: int, quantity: int,
+            variant_id: int | None = None) -> CartItem:
+        item = CartItem(
+            user_id=user_id, product_id=product_id,
+            variant_id=variant_id, quantity=quantity,
+        )
         self.db.add(item)
         self.db.commit()
         self.db.refresh(item)

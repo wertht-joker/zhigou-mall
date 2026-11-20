@@ -13,13 +13,16 @@
 ## 一、功能特性
 
 **电商平台（业务域）**
-- **商品与分类**：平台级商品分类导航 + 商家商品管理（上新/改价/库存/上下架），前台全平台浏览搜索
+- **商品与分类**：平台级商品分类导航 + 商家商品管理（上新/改价/库存/上下架/主图上传），前台全平台浏览搜索
 - **购物车**：加购自动合并数量、库存上限校验、修改/移除/清空
 - **收货地址簿**：增删改查 + 默认地址，下单锁定地址快照
 - **订单全状态机**：待付款 → 待发货 → 已发货 → 已完成（可取消/确认收货），下单扣库存、取消回补，
   订单明细保存商品名称/价格快照
+- **立即购买**：绕过购物车直接按商品/规格/数量下单（`buy_now`），与购物车结算共用库存与优惠券逻辑
+- **超时自动取消**：待付款订单默认 30 分钟未支付，后台任务自动取消并回补商品/规格库存
 - **商家发货**：商家（租户）只能看到并操作「包含本店商品」的订单，填写物流后流转状态
 - **商家入驻**：注册即建店（自动创建租户 + 店铺管理员），店铺编码唯一
+- **列表分页**：商品与我的订单接口分页返回 `{items,total,page,page_size}`，网页端分页器、小程序触底加载
 
 **AI 智能客服（RAG 核心）**
 - **Agent 智能问答（ReAct + Function Calling）**：模型自主决定调哪个工具、调几轮，再汇总回答
@@ -33,10 +36,15 @@
 - **可配置 Rerank**：`none`（不精排）/ `always`（总是精排）/ `conditional`（候选数达阈值才精排）
 - **查询缓存**：查询向量与检索结果进 Redis（键含 `tenant_id + query + 参数`，带 TTL）
 - 答案**附带引用来源**，可溯源到原文片段；前端 **AI 客服悬浮窗**全站可用（SSE 流式）
+- **知识缺口闭环**：每轮问答记录 `qa_events`（召回数 / 证据充分性 / 忠实度 / 点踩），
+  平台按商家隔离聚类缺口，一键生成带证据指针的 FAQ 草稿并发布入库；
+  发布后自动用原问题做 Top-K 命中率回归，发布只关闭该商家的缺口
+- **平台知识库按商家管理**：平台管理员可筛选任意商家、跨租户上传/编辑/切换版本/删除文档，
+  商家侧仍只能访问自己的知识库
 
 **商家（多租户）与权限**
 - **完整多租户 = 多商家**：`tenants` 表（即店铺）+ 各业务表 `tenant_id` + 复合索引；JWT 携带 `tenant_id`；
-  仓储层**强制**按租户过滤；Milvus 采用**单集合 + `partition_key`（tenant_id）**，检索/删除带 `expr` 隔离
+  仓储层**强制**按租户过滤；向量库同样按租户隔离（本地 SQLite 用 `tenant_id` 条件，Milvus 可选 `partition_key`）
 - **角色 → 权限点**：`admin`（商家管理员：商品/订单/知识库/分类/反馈/租户）/ `editor`（商家运营）/ `customer`（顾客：逛商城下单，无管理权限）；`require_permission(...)` 依赖工厂
 - 登录自动按用户名定位所属商家（用户名平台级唯一），顾客/商家都无需记忆租户编码
 
@@ -46,8 +54,8 @@
 - **结构化 JSON 日志** + `X-Request-ID` → `trace_id` 全链路透传（纯 ASGI 中间件，不影响 SSE）
 - **Redis 令牌桶限流**（Lua 脚本，Redis 不可用时降级为进程内实现）
 - **Alembic 迁移**：启动自动 `upgrade head`；电商表结构为独立 revision（`b4d8c2e61f07`）
-- **健康检查**：`/health`（liveness）+ `/health/ready`（探 DB / Milvus / Redis）
-- **Docker Compose** 一键起 PostgreSQL + Redis + Milvus + 后端 + 前端；**GitHub Actions** 跑测试
+- **健康检查**：`/health`（liveness）+ `/health/ready`（探 DB / 向量库 / Redis）
+- **Docker Compose** 一键起 PostgreSQL + Redis + Milvus + 后端 + 前端；**GitHub Actions** 跑 pytest、ruff 静态检查、前端构建与小程序 H5 构建
 - **检索评测**：`evals/` 提供 hit rate / MRR / recall@k 指标脚本（mock 模型，CI 可离线跑）
 
 ---
@@ -61,16 +69,17 @@
 | 关系库 | PostgreSQL（默认 SQLite 可回退） | 商品/订单/购物车/商家/用户/知识文档 |
 | 迁移 | Alembic | 启动自动 `upgrade head`，历史库自动 stamp |
 | 缓存 / 限流 | Redis（不可用时自动降级） | 查询缓存 + 令牌桶限流 |
-| 向量库 | Milvus（Docker 部署） | 单集合 + partition_key 隔离商家 |
+| 向量库 | 本地 SQLite（默认，无需 Docker）/ Milvus（可选） | 单文件向量库，检索时按租户与政策生效区间过滤 |
 | RAG 框架 | LangChain | 文本加载与切分 |
 | 混合检索 | jieba + rank_bm25 + RRF | 关键词通路与向量通路融合 |
 | 对话模型 | DeepSeek（deepseek-chat） | OpenAI 兼容接口，带指数退避重试 |
 | Embedding | sentence-transformers（BAAI/bge-base-zh-v1.5） | 本地向量化，免 API Key，延迟导入 |
 | Rerank | BGE-reranker（可配置开关） | 二阶段精排 |
 | 文档解析 | PyMuPDF / python-docx / openpyxl | 分格式解析，表格结构化 |
-| 前端 | Vue3 + Element Plus | 京东红主题商城 + 商家后台 + AI 客服悬浮窗 |
+| 前端 | Vue3 + Element Plus | 京东红主题商城 + 商家后台 + AI 客服悬浮窗；Vite 依赖分包（vue / element-plus / 地区数据） |
+| 小程序 | uni-app + Vue3 | 顾客端小程序（H5 / 微信小程序双端构建），复用同一套后端 API，支持优惠券结算与列表触底加载 |
 | 可观测 | 结构化 JSON 日志 + trace_id | 每请求一条访问日志，响应头回写 `X-Request-ID` |
-| 测试 | pytest（内存 SQLite + 全打桩） | 不联网、不依赖真实模型，CI 可跑（53 用例） |
+| 测试 | pytest（内存 SQLite + 全打桩） | 不联网、不依赖真实模型，CI 可跑（含电商全链路 / 超时清理 / 上传 / 分页） |
 
 ---
 
@@ -81,7 +90,7 @@ knowledge-base
 ├── 需求文档.md
 ├── 部署与演示说明.md
 ├── docker-compose.yml            # postgres + redis + milvus + backend + frontend
-├── .github/workflows/ci.yml      # CI：pytest（全打桩）+ 前端构建
+├── .github/workflows/ci.yml      # CI：pytest（全打桩）+ ruff + 前端/小程序构建
 ├── samples/                      # 平台知识库文档（启动时自动导入）
 │   ├── 售后服务政策.md / 物流配送说明.md / 会员与积分.md ...
 │   └── 智购商城购物指南.md
@@ -89,7 +98,8 @@ knowledge-base
 │   ├── requirements.txt
 │   ├── alembic/                  # 迁移（基线 + 多租户 + 电商 schema）
 │   ├── evals/                    # ★ 检索评测：dataset.json + run_eval.py
-│   ├── tests/                    # ★ 53 个用例（内存库 + 全打桩，含电商全链路）
+│   ├── tests/                    # ★ 150+ 用例（内存库 + 全打桩，覆盖电商/售后/检索/超时清理）
+│   ├── static/products/          # 演示商品实物图（运行时上传落在 static/uploads/）
 │   └── app/
 │       ├── main.py               # 入口：迁移 + 商城演示数据种子 + 路由注册
 │       ├── core/                 # config / errors / response / logging / middleware / redis / rate_limit / migrations
@@ -100,11 +110,12 @@ knowledge-base
 │       ├── utils/security.py     # JWT：payload 含 user_id / role / tenant_id
 │       ├── api/                  # 路由：products / cart / orders / addresses / chat / documents / auth / ...
 │       └── rag/                  # ★ RAG 链路（loader/splitter/embedding/vector_store/bm25/fusion/retriever/reranker/generator）
-└── frontend/                     # Vue3 京东风商城
-    └── src/
-        ├── components/           # MallLayout（顶栏+搜索+购物车）/ ProductCard / ChatWidget（AI 客服悬浮窗）
-        ├── views/                # 登录 / 首页 / 搜索 / 详情 / 购物车 / 结算 / 我的订单
-        └── views/admin/          # 商家后台：商品管理 / 订单发货 / 知识库 / 知识分类
+├── miniapp/                      # 顾客端小程序（uni-app + Vue3，H5 / 微信双端）
+├── frontend/                     # Vue3 京东风商城
+│   └── src/
+│       ├── components/           # MallLayout（顶栏+搜索+购物车）/ ProductCard / ChatWidget（AI 客服悬浮窗）
+│       ├── views/                # 登录 / 首页 / 搜索 / 详情 / 购物车 / 结算 / 我的订单
+│       └── views/admin/          # 商家后台：商品管理（含主图上传） / 订单发货 / 售后 / 知识库
 ```
 
 ---
@@ -113,11 +124,11 @@ knowledge-base
 
 - Python 3.10+
 - Node.js 18+（前端）
-- Docker Desktop（PostgreSQL / Redis / Milvus）
 - DeepSeek API Key（platform.deepseek.com）
+- （可选）Docker Desktop：只有切换到 Milvus / PostgreSQL 时才需要
 
-> **零依赖也能跑**：不配 PostgreSQL/Redis 时，后端默认回退 **SQLite**，缓存与限流自动降级为进程内实现，
-> 只有 Milvus 是必须的（向量检索）。
+> **默认本地模式（无需 Docker）**：业务库用 SQLite，向量库用 `backend/vector.db`
+> （本地内嵌，余弦相似度检索），Redis 不可用时缓存与限流自动降级为进程内实现。
 
 ---
 
@@ -139,16 +150,14 @@ copy .env.example .env
 ```
 
 编辑 `.env`，至少填入 DeepSeek Key（`DEEPSEEK_API_KEY`）。
+默认 `VECTOR_BACKEND=sqlite`，不需要启动任何数据库容器。
 
-### 3. 启动依赖（Docker）
+### 3. 启动依赖（默认无需 Docker）
 
-```bash
-# 回到项目根目录
-cd ..
-docker compose up -d postgres redis milvus   # 只起依赖，后端本地跑（便于调试）
-docker compose ps                            # 确认容器 healthy
-```
+项目根目录已提供 `start.bat`：双击后自动打开后端（8000）和前端（5173）两个窗口。
 
+> 如需 PostgreSQL / Milvus：先 `docker compose up -d postgres redis milvus`，
+> 再在 `backend/.env` 中设置 `VECTOR_BACKEND=milvus` 与对应的 `DATABASE_URL`。
 > 想一键起全套（含后端 + 前端）：`docker compose up -d`，前端在 http://localhost:8080。
 
 ### 4. 启动后端
@@ -158,8 +167,9 @@ cd backend
 uvicorn app.main:app --reload --port 8000
 ```
 
-启动时会自动：**执行 Alembic 迁移** → 写入**商城演示数据**（两家店铺、12 件商品、
-演示顾客的历史订单）→ 把 `samples/` 下的客服知识文档**自动导入平台知识库**。
+启动时会自动：**执行 Alembic 迁移** → 写入**商城演示数据**（两家店铺、商品、
+演示顾客的历史订单）→ 把 `samples/` 与 `uploads/` 下的知识文档**导入本地向量库**
+（首次会自动重建，之后按 `vector.db` 复用）。
 
 ### 5. 启动前端（Vue3）
 
@@ -176,9 +186,27 @@ npm run dev
 ### 6. 验证
 
 - 前端页面：http://localhost:5173
-- 存活探针：http://localhost:8000/api/v1/health
-- **就绪探针**：http://localhost:8000/api/v1/health/ready（探 DB + Milvus + Redis）
+- 存活探针：http://localhost:8000/api/v1/health（`vector_backend` 显示当前后端）
+- **就绪探针**：http://localhost:8000/api/v1/health/ready（探 DB + 向量库；Redis 可降级）
 - 接口文档：http://localhost:8000/docs
+
+### 7. 启动小程序端（uni-app）
+
+```bash
+cd miniapp
+npm install
+npm run dev:h5        # 浏览器预览：http://localhost:5174
+npm run build:mp-weixin
+```
+
+微信小程序运行方式：
+
+1. 用微信开发者工具导入 `miniapp/dist/build/mp-weixin`
+2. AppID 可先用测试号；本地联调需在「详情 → 本地设置」勾选**不校验合法域名**
+3. 使用 `demo / demo123` 登录，即可体验首页、商品详情、购物车、结算、订单、AI 客服
+
+> 真机调试把 `miniapp/src/api/config.js` 的 `BASE_URL` 改成电脑局域网 IP；
+> 正式发布需要 HTTPS 域名、ICP 备案，并在小程序后台配置 request 合法域名。
 
 ---
 
@@ -187,8 +215,9 @@ npm run dev
 | 账号 | 密码 | 角色 | 说明 |
 |---|---|---|---|
 | `demo` | `demo123` | 顾客 | 有历史订单（已发货/已完成/待付款各一单），可直接演示 AI 客服查订单 |
-| `admin` | `admin123` | 平台管理员 | 智购自营官方旗舰店（默认租户），商品/知识库/发货全权限 |
-| `shop` | `shop123` | 商家管理员 | 星辰数码旗舰店（租户 `star`），演示多商家隔离 |
+| `admin` | `admin123` | 平台管理员 | 平台监管：商家/分类/商品审核、知识库、审计、智能洞察，不参与店铺经营 |
+| `self` | `self123` | 自营店长 | 智购自营官方旗舰店（租户 `default`）管理员，负责自营店铺商品与发货 |
+| `shop` | `shop123` | 第三方商家管理员 | 星辰数码旗舰店（租户 `star`），演示多商家隔离与独立发货 |
 
 注册页可自助「顾客注册」或「商家入驻」（入驻自动建店 + 店铺管理员）。
 
@@ -205,14 +234,15 @@ npm run dev
 | POST | /auth/register | 注册：顾客（默认）/ 商家入驻（`register_type=merchant` + `merchant_name`） | 公开 |
 | POST | /auth/login | 登录（无需租户编码，自动按用户名定位商家） | 公开 |
 | GET | /tenants | 商家列表 | `tenant:manage`（admin） |
-| GET | /products | 商品列表（公开，keyword/category_id 过滤，按销量排序） | 公开 |
+| GET | /products | 商品列表（公开，keyword/category_id 过滤 + `page/page_size` 分页） | 公开 |
 | GET | /product-categories | 商品分类（公开，平台级） | 公开 |
 | GET | /products/{id} | 商品详情 | 公开 |
 | GET/POST/PUT/DELETE | /merchant/products | 商家商品管理（**仅本店**） | `product:manage` |
+| POST | /merchant/products/{id}/image | 商家上传商品主图（≤5MB，JPG/PNG/WEBP/GIF） | `product:manage` |
 | GET/POST | /cart、/cart/items | 购物车查看 / 加购 / 改量 / 移除 | 登录（本人） |
 | GET/POST/PUT/DELETE | /addresses | 收货地址簿 | 登录（本人） |
-| POST | /orders | 下单（购物车条目 + 地址，扣库存、清购物车） | 登录（本人） |
-| GET | /orders、/orders/{id} | 我的订单（列表/详情，**仅本人**） | 登录 |
+| POST | /orders | 下单（购物车条目或 `buy_now` + 地址，扣库存、清购物车） | 登录（本人） |
+| GET | /orders、/orders/{id} | 我的订单（分页列表/详情，**仅本人**） | 登录 |
 | POST | /orders/{id}/pay · /cancel · /confirm | 支付 / 取消 / 确认收货 | 登录（本人） |
 | GET | /merchant/orders | 商家订单列表（仅含本店商品的订单） | `order:manage` |
 | POST | /merchant/orders/{id}/ship | 商家发货（填物流单号） | `order:manage` |
@@ -239,7 +269,9 @@ npm run dev
 ## 八、核心流程
 
 ```
-顾客购物：首页/搜索 → 商品详情 → 加购 → 结算（地址快照 + 扣库存） → 支付 → 商家发货 → 确认收货
+顾客购物：首页/搜索 → 商品详情 → 加购 或 立即购买 → 结算（地址快照 + 扣库存）
+          → 支付 → 商家发货 → 确认收货
+          （待付款超过 30 分钟未支付：后台任务自动取消并回补商品/规格库存）
 
 AI 客服：提问 → Agent 决定调哪个工具
   ├─ 规则类问题 → search_knowledge_base（向量+BM25 → RRF → rerank，按商家隔离）→ 带引用回答
@@ -278,7 +310,7 @@ python -m evals.run_eval
 
 ```bash
 cd backend
-python -m pytest -q      # 53 passed
+python -m pytest -q      # 152 passed
 ```
 
 - 测试用**内存 SQLite（StaticPool）**覆盖 `get_db`，**打桩** LLM / Milvus / BGE / 上传目录，不联网；
@@ -297,6 +329,7 @@ python -m pytest -q      # 53 passed
 - [x] M5 京东风前端：商城 + 商家后台 + AI 客服悬浮窗
 - [x] **R2 工程化：Alembic + PostgreSQL + 结构化日志/trace_id + Redis/限流 + Docker/CI + 重试**
 - [x] **R4 混合检索（向量+BM25+RRF）+ 可配置 rerank + 查询缓存 + 评测指标**
+- [x] **R5 知识缺口闭环：问答事件采集 → 按商家聚类 → FAQ 草稿 → 一键入库 → 缺口关闭 → Top-K 命中率回归**
 
 ---
 
@@ -396,7 +429,7 @@ BM25 语料也按租户拉取（`fetch_chunks(tenant_id)`），避免跨商家�
 **Q18：测试怎么做到不联网也能跑全链路？**
 内存 SQLite（StaticPool）覆盖 `get_db`，LLM 三种调用（tools/text/stream）全部 monkeypatch 成固定回答，
 Milvus/BGE/上传目录打桩。电商链路（加购→下单→支付→发货→收货）、库存回补、越权 404、
-AI 工具的归属过滤与预算过滤都有专门断言，53 个用例 20 秒跑完。
+AI 工具的归属过滤与预算过滤都有专门断言，152 个用例约 1 分钟跑完。
 
 **Q19：这个系统还能怎么改进？**
 ① 库存防超卖升级为条件更新/Redis 预扣；② 大文档解析进任务队列（当前刻意保持轻量）；

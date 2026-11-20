@@ -9,6 +9,7 @@
 """
 import logging
 import os
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -16,11 +17,14 @@ from app.core.config import settings
 from app.models.database import SessionLocal
 from app.models.order import Order, OrderItem
 from app.models.product import Product, ProductCategory
+from app.models.qa_event import QaEvent
 from app.models.user import User
+from app.repositories.category_repository import CategoryRepository
 from app.repositories.document_repository import DocumentRepository
 from app.repositories.product_repository import (
     ProductCategoryRepository,
     ProductRepository,
+    ProductVariantRepository,
 )
 from app.repositories.tenant_repository import TenantRepository
 from app.repositories.user_repository import UserRepository
@@ -81,6 +85,24 @@ REVIEW_SEEDS = [
 ]
 
 
+# 多规格演示数据：商品名 → [(规格名, 售价, 原价, 库存)]
+VARIANT_SEEDS = [
+    ("智星 X1 5G 智能手机", [
+        ("12GB+256GB 曜石黑", 3999.0, 4299.0, 120),
+        ("16GB+512GB 曜石黑", 4599.0, 4899.0, 50),
+        ("16GB+1TB 冰川蓝", 5299.0, 5599.0, 30),
+    ]),
+    ("智星 Book 14 轻薄笔记本", [
+        ("16G+1T 深空灰", 5499.0, 5999.0, 80),
+        ("32G+1T 深空灰", 6499.0, 6999.0, 40),
+    ]),
+    ("星辰 Pad 11 英寸平板", [
+        ("8G+256G 星空灰", 2299.0, 2699.0, 60),
+        ("12G+512G 星空灰", 2899.0, 3199.0, 30),
+    ]),
+]
+
+
 def run_seed() -> None:
     """启动入口：建表后写入全部演示数据"""
     db = SessionLocal()
@@ -88,9 +110,12 @@ def run_seed() -> None:
         platform = _ensure_stores(db)
         _ensure_users(db, platform)
         categories = _ensure_categories(db)
+        _ensure_knowledge_categories(db, platform.id)
         _ensure_products(db, platform.id, categories)
+        _ensure_variants(db)
         _ensure_demo_customer_data(db)
         _ensure_demo_reviews(db)
+        _ensure_demo_qa_events(db, platform)
         if settings.seed_knowledge:
             _ingest_sample_knowledge(db, platform.id)
     finally:
@@ -118,7 +143,8 @@ def _ensure_users(db: Session, platform) -> None:
     user_repo = UserRepository(db)
     merchant = TenantRepository(db).get_by_code(DEMO_MERCHANT_CODE)
 
-    def _create(username: str, password: str, role: str, tenant_id: int) -> None:
+    def _create(username: str, password: str, role: str,
+                tenant_id: int | None) -> None:
         if user_repo.get_by_username(username):
             return
         user_repo.create(
@@ -129,7 +155,9 @@ def _ensure_users(db: Session, platform) -> None:
         )
         logger.info("已创建演示账号：%s / %s（%s）", username, password, role)
 
-    _create("admin", "admin123", "admin", platform.id)
+    # 平台管理员不归属商家；shop 是第三方商家管理员；self 是自营店铺店长
+    _create("admin", "admin123", "platform_admin", None)
+    _create("self", "self123", "admin", platform.id)
     if merchant:
         _create("shop", "shop123", "admin", merchant.id)
     _create("demo", "demo123", "customer", platform.id)
@@ -145,6 +173,9 @@ def _ensure_categories(db: Session) -> dict[str, int]:
         ("智能家居", "💡", 4),
         ("服饰鞋包", "👕", 5),
         ("食品生鲜", "🍎", 6),
+        ("运动户外", "🏃", 7),
+        ("美妆个护", "💄", 8),
+        ("图书文娱", "📚", 9),
     ]
     existing = {c.name: c.id for c in repo.list()}
     for name, icon, sort in seeds:
@@ -152,6 +183,20 @@ def _ensure_categories(db: Session) -> dict[str, int]:
             category = repo.create(name, icon, sort)
             existing[name] = category.id
     return existing
+
+
+def _ensure_knowledge_categories(db: Session, tenant_id: int) -> None:
+    """平台知识库分类（AI 客服文档归档）"""
+    repo = CategoryRepository(db)
+    existing = {c.name for c in repo.list(tenant_id)}
+    for name, sort in [
+        ("售后服务", 1),
+        ("物流配送", 2),
+        ("会员与积分", 3),
+        ("购物指南", 4),
+    ]:
+        if name not in existing:
+            repo.create(name=name, sort=sort, tenant_id=tenant_id)
 
 
 def _ensure_products(db: Session, platform_tenant_id: int,
@@ -188,6 +233,56 @@ def _ensure_products(db: Session, platform_tenant_id: int,
         (platform_tenant_id, "机械键盘 87 键", "RGB 背光 热插拔轴体",
          329.0, 399.0, 220, 1408, "⌨️", "keyboard.jpg", "电脑办公",
          "全键无冲，PBT 键帽，游戏办公手感兼顾。"),
+        # 服饰鞋包
+        (platform_tenant_id, "轻量缓震运动鞋", "透气网面 男女同款跑步鞋",
+         269.0, 329.0, 300, 1860, "👟", "shoes.jpg", "服饰鞋包",
+         "单只约 230g，回弹中底，日常通勤与慢跑都合适。"),
+        (platform_tenant_id, "纯棉基础款 T 恤", "100% 新疆棉 多色可选",
+         79.0, 99.0, 800, 6420, "👕", "tshirt.jpg", "服饰鞋包",
+         "260g 重磅纯棉，不易变形，四季可穿的基础款。"),
+        (platform_tenant_id, "城市通勤双肩包", "15.6 英寸电脑仓 防泼水",
+         189.0, 239.0, 260, 1245, "🎒", "backpack.jpg", "服饰鞋包",
+         "独立电脑隔层，背部透气，出差通勤一包搞定。"),
+        # 食品生鲜
+        (platform_tenant_id, "云南高山蓝莓 4 盒装", "当季鲜果 果径 18mm+",
+         89.0, 119.0, 400, 3310, "🫐", "blueberry.jpg", "食品生鲜",
+         "冷链直发，果粉完整，酸甜适口，开盒即食。"),
+        (platform_tenant_id, "原切牛排套餐 1.5kg", "谷饲西冷 10 片装",
+         199.0, 259.0, 200, 1580, "🥩", "steak.jpg", "食品生鲜",
+         "原切不拼接，独立真空包装，送黄油与黑椒酱。"),
+        (platform_tenant_id, "每日坚果礼盒 30 包", "6 种坚果科学配比",
+         129.0, 169.0, 500, 4870, "🥜", "nuts.jpg", "食品生鲜",
+         "独立小包锁鲜，无添加蔗糖，办公室与送礼皆宜。"),
+        # 运动户外
+        (platform_tenant_id, "加厚防滑瑜伽垫", "10mm 回弹 TPE 材质",
+         99.0, 139.0, 350, 2210, "🧘", "yogamat.jpg", "运动户外",
+         "双面防滑纹路，回弹护膝，附赠绑带与收纳袋。"),
+        (platform_tenant_id, "户外折叠露营椅", "航空铝架 承重 150kg",
+         159.0, 219.0, 180, 960, "🏕️", "campingchair.jpg", "运动户外",
+         "一秒展开，收纳后仅 38cm，附带便携提袋。"),
+        (platform_tenant_id, "智能计数跳绳", "无绳/有绳双模式",
+         69.0, 99.0, 600, 3560, "🏃", "jumprope.jpg", "运动户外",
+         "屏幕实时计数，支持卡路里估算，居家健身方便。"),
+        # 美妆个护
+        (platform_tenant_id, "氨基酸温和洁面乳", "敏感肌适用 120g",
+         79.0, 109.0, 700, 5120, "🧴", "cleanser.jpg", "美妆个护",
+         "弱酸性配方，洗后不紧绷，早晚均可使用。"),
+        (platform_tenant_id, "玻尿酸保湿修护面霜", "50g 深层锁水",
+         129.0, 179.0, 450, 2760, "💧", "facecream.jpg", "美妆个护",
+         "多重玻尿酸复配，质地清爽，换季保湿维稳。"),
+        (platform_tenant_id, "声波电动牙刷", "5 档模式 90 天续航",
+         199.0, 299.0, 380, 1980, "🪥", "toothbrush.jpg", "美妆个护",
+         "声波震动清洁，智能计时，附赠 2 支刷头。"),
+        # 图书文娱
+        (platform_tenant_id, "《深入理解计算机系统》", "原书第 3 版 精装",
+         139.0, 168.0, 150, 870, "📘", "csapp.jpg", "图书文娱",
+         "计算机专业经典教材，覆盖程序结构与系统原理。"),
+        (platform_tenant_id, "桌面拼装积木花束", "520 颗粒 解压摆件",
+         89.0, 129.0, 320, 1640, "🧱", "blocks.jpg", "图书文娱",
+         "免胶拼装，附步骤图，成品可长期摆放装饰桌面。"),
+        (platform_tenant_id, "无线蓝牙翻页笔", "教师/演讲适用 100 米遥控",
+         59.0, 89.0, 500, 2310, "📡", "presenter.jpg", "图书文娱",
+         "支持翻页、全屏、黑屏，USB-C 充电，即插即用。"),
         # 演示商家（星辰数码旗舰店）
         (None, "星辰 Watch S 智能手表", "血氧心率监测 14 天续航",
          1299.0, 1499.0, 180, 653, "⌚", "smartwatch.jpg", "手机数码",
@@ -198,6 +293,9 @@ def _ensure_products(db: Session, platform_tenant_id: int,
         (None, "星辰移动电源 20000mAh", "22.5W 超级快充 双口输出",
          149.0, 199.0, 600, 2870, "🔋", "powerbank.jpg", "手机数码",
          "数显电量，可上飞机，出门在外不断电。"),
+        (None, "星辰降噪运动耳机", "IPX5 防水 30 小时续航",
+         299.0, 399.0, 200, 1120, "🎧", "sportsearbuds.jpg", "运动户外",
+         "耳挂式稳固佩戴，运动防汗，支持环境音模式。"),
     ]
     star = TenantRepository(db).get_by_code(DEMO_MERCHANT_CODE)
     for tenant_id, name, subtitle, price, original, stock, sales, image, img_file, cat, desc in products:
@@ -226,6 +324,35 @@ def _ensure_products(db: Session, platform_tenant_id: int,
             image_url=image_url,
         )
     logger.info("商品数据就绪（共 %d 件在售）", len(repo.list_public()))
+
+
+def _ensure_variants(db: Session) -> None:
+    """为演示商品补齐多规格（幂等：已有规格的商品跳过）
+
+    同步商品汇总字段：price = 最低规格价，stock = 各规格库存之和，
+    与商家后台保存规格时的规则保持一致。
+    """
+    repo = ProductVariantRepository(db)
+    product_repo = ProductRepository(db)
+    created = 0
+    for product_name, variants in VARIANT_SEEDS:
+        product = product_repo.get_by_name(product_name)
+        if not product or repo.list_by_product(product.id):
+            continue
+        for spec, price, original, stock in variants:
+            repo.create(
+                product_id=product.id,
+                spec=spec,
+                price=price,
+                original_price=original,
+                stock=stock,
+            )
+            created += 1
+        product.price = min(v[1] for v in variants)
+        product.stock = sum(v[3] for v in variants)
+        db.commit()
+    if created:
+        logger.info("已写入商品规格 %d 个", created)
 
 
 def _ensure_demo_customer_data(db: Session) -> None:
@@ -363,6 +490,109 @@ def _ensure_demo_reviews(db: Session) -> None:
         logger.info("已写入演示商品评价 %d 条", created)
 
 
+def _reindex_uploaded_docs(db: Session, tenant_id: int,
+                           existing_docs: dict, indexed_names: set[str]) -> int:
+    """向量库为空时，把 uploads/ 下已上传文档重建索引
+
+    切换向量后端（Milvus → 本地 SQLite）后 documents 元数据还在，
+    但向量需要重建；政策文档不在 samples/ 里，必须从 uploads/ 补齐，
+    否则历史政策版本会从检索结果里消失。
+    """
+    from app.rag import embedding, loader, splitter, vector_store
+
+    upload_dir = os.path.normpath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "uploads")
+    )
+    repo = DocumentRepository(db)
+    imported = 0
+    for name, doc in existing_docs.items():
+        if name in indexed_names:
+            continue
+        path = os.path.join(upload_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            text = loader.load_document(path, doc.type or "md")
+            if not text.strip():
+                continue
+            chunks = splitter.split_text(text)
+            if not chunks:
+                continue
+            vectors = embedding.embed(chunks)
+            vector_store.insert_chunks(
+                doc.id, chunks, vectors, tenant_id,
+                policy_key=doc.policy_key,
+                doc_version=doc.version,
+                effective_from=doc.effective_from,
+                effective_to=doc.effective_to,
+            )
+            doc.chunk_count = len(chunks)
+            doc.status = "done"
+            repo.save(doc)
+            imported += 1
+        except Exception as exc:  # 单篇失败不影响其他文档重建
+            logger.warning("已上传文档重建索引失败（%s）：%s", name, exc)
+    return imported
+
+
+def _ensure_demo_qa_events(db: Session, platform) -> None:
+    """按商家预置知识缺口演示事件（每个商家只写一次）
+
+    覆盖：检索无结果、证据不足、顾客点踩、忠实度偏低；
+    自营店与第三方商家各有一组，用于演示「缺口按商家隔离」。
+    """
+    demo = UserRepository(db).get_by_username("demo")
+    user_id = demo.id if demo else None
+    now = datetime.now()
+
+    platform_seeds = [
+        ("支持花呗分期吗", 0, "hybrid+rerank", "insufficient", None, None),
+        ("可以用花呗分期付款吗", 0, "hybrid+rerank", "insufficient", None, None),
+        ("发票怎么开", 0, "hybrid", "insufficient", None, None),
+        ("能开发票吗", 0, "hybrid", "insufficient", None, None),
+        ("退货运费谁承担", 2, "hybrid+rerank", "partial", 0.42, "down"),
+        ("退货的运费谁出", 1, "hybrid+rerank", "partial", 0.48, "down"),
+        ("可以修改收货地址吗", 1, "hybrid+rerank", "partial", 0.52, "down"),
+        ("发货后能改地址吗", 1, "hybrid+rerank", "partial", 0.55, "down"),
+    ]
+    merchant_seeds = [
+        ("星辰数码支持货到付款吗", 0, "hybrid+rerank", "insufficient", None, None),
+        ("可以货到付款吗", 0, "hybrid", "insufficient", None, None),
+        ("你们店有延保服务吗", 0, "hybrid+rerank", "insufficient", None, None),
+        ("耳机坏了怎么保修", 1, "hybrid+rerank", "partial", 0.5, "down"),
+    ]
+
+    def _seed_tenant(tenant, seeds) -> int:
+        if not tenant or db.query(QaEvent).filter(
+            QaEvent.tenant_id == tenant.id
+        ).count() > 0:
+            return 0
+        for index, (query, sources, route, sufficiency, faithfulness, feedback) in enumerate(seeds):
+            db.add(QaEvent(
+                tenant_id=tenant.id,
+                user_id=user_id,
+                session_id=None,
+                message_id=None,
+                query=query,
+                answer="（演示数据）知识库未覆盖该问题，系统提示转人工核实。",
+                sources_count=sources,
+                sufficiency=sufficiency,
+                faithfulness=faithfulness,
+                route=route,
+                feedback=feedback,
+                handled=False,
+                created_at=now - timedelta(days=index % 5, hours=index),
+            ))
+        db.commit()
+        return len(seeds)
+
+    merchant = TenantRepository(db).get_by_code(DEMO_MERCHANT_CODE)
+    written = _seed_tenant(platform, platform_seeds)
+    written += _seed_tenant(merchant, merchant_seeds)
+    if written:
+        logger.info("已写入 %d 条知识缺口演示事件（按商家隔离）", written)
+
+
 def _ingest_sample_knowledge(db: Session, tenant_id: int) -> None:
     """把项目根目录 samples/ 下的客服知识文档导入平台知识库（幂等）"""
     from app.rag import embedding, loader, splitter, vector_store
@@ -375,10 +605,16 @@ def _ingest_sample_knowledge(db: Session, tenant_id: int) -> None:
         return
 
     repo = DocumentRepository(db)
-    existing = {d.name for d in repo.list(tenant_id=tenant_id)}
+    existing_docs = {d.name: d for d in repo.list(tenant_id=tenant_id)}
+    # 新集合（如 v3 增加政策版本字段）首次启动时向量为空，
+    # 但 documents 元数据还在：此时强制从 samples/ 重建索引，避免“有元数据没向量”。
+    needs_reindex = not vector_store.has_chunks(tenant_id)
     imported = 0
+    indexed_names: set[str] = set()
     for filename in sorted(os.listdir(samples_dir)):
-        if not filename.lower().endswith((".md", ".txt")) or filename in existing:
+        if not filename.lower().endswith((".md", ".txt")):
+            continue
+        if filename in existing_docs and not needs_reindex:
             continue
         path = os.path.join(samples_dir, filename)
         try:
@@ -389,14 +625,32 @@ def _ingest_sample_knowledge(db: Session, tenant_id: int) -> None:
             if not chunks:
                 continue
             vectors = embedding.embed(chunks)
-            doc = repo.create(filename, "md", tenant_id)
+            doc = existing_docs.get(filename)
+            if doc is None:
+                doc = repo.create(filename, "md", tenant_id)
             doc.size = os.path.getsize(path)
-            vector_store.insert_chunks(doc.id, chunks, vectors, tenant_id)
+            vector_store.insert_chunks(
+                doc.id, chunks, vectors, tenant_id,
+                policy_key=doc.policy_key,
+                doc_version=doc.version,
+                effective_from=doc.effective_from,
+                effective_to=doc.effective_to,
+            )
             doc.chunk_count = len(chunks)
             doc.status = "done"
             repo.save(doc)
             imported += 1
+            indexed_names.add(filename)
         except Exception as exc:  # 模型/向量库不可用时不阻断启动
             logger.warning("知识文档导入失败（%s）：%s", filename, exc)
+
+    if needs_reindex:
+        imported += _reindex_uploaded_docs(
+            db, tenant_id, existing_docs, indexed_names
+        )
+
     if imported:
+        from app.core.redis import bump_kb_version
+
+        bump_kb_version()
         logger.info("已自动导入平台知识库文档 %d 篇（目录 %s）", imported, samples_dir)

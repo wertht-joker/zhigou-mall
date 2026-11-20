@@ -29,7 +29,10 @@ class Order(Base):
     """订单头"""
 
     __tablename__ = "orders"
-    __table_args__ = (Index("ix_orders_user_created", "user_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_orders_user_created", "user_id", "created_at"),
+        Index("ix_orders_status_expire", "status", "expire_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     # 下单顾客
@@ -50,6 +53,19 @@ class Order(Base):
     receiver_address: Mapped[str] = mapped_column(String(255), default="")
     # 物流信息，发货时填写
     logistics: Mapped[str] = mapped_column(String(100), default="")
+    # 物流公司 / 运单号 / 发货时间 / 预计送达
+    logistics_company: Mapped[str] = mapped_column(String(50), default="")
+    tracking_no: Mapped[str] = mapped_column(String(50), default="")
+    shipped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    estimated_delivery_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    # 支付方式（alipay / wechat / unionpay），支付成功后写入
+    payment_method: Mapped[str] = mapped_column(String(20), default="")
+    # 支付完成时间
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 待付款订单的支付截止时间：超时由后台任务自动取消并回补库存
+    expire_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
@@ -65,6 +81,9 @@ class OrderItem(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     order_id: Mapped[int] = mapped_column(Integer, nullable=False)
     product_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 所选规格（可空）及其名称快照
+    variant_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    variant_spec: Mapped[str] = mapped_column(String(100), default="")
     # 商品所属商家（商家据此圈定自己的订单）
     merchant_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 下单时的商品快照（商品后续改名/改价不影响历史订单）
@@ -72,3 +91,20 @@ class OrderItem(Base):
     image: Mapped[str] = mapped_column(String(20), default="📦")
     price: Mapped[float] = mapped_column(Float, default=0.0)
     quantity: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class OrderLogisticsEvent(Base):
+    """物流轨迹节点（发货时预生成，按时间逐步对外可见）"""
+
+    __tablename__ = "order_logistics_events"
+    __table_args__ = (
+        Index("ix_logistics_order_time", "order_id", "occurred_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="")
+    description: Mapped[str] = mapped_column(String(200), default="")
+    location: Mapped[str] = mapped_column(String(100), default="")
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)

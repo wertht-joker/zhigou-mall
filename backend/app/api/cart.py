@@ -13,14 +13,18 @@ router = APIRouter(tags=["购物车"])
 
 
 def _serialize(items: list[dict]) -> list[dict]:
-    """商品 ORM 对象转 dict，供 JSON 返回"""
+    """商品 ORM 对象转 dict，规格与成交单价直接透出"""
     result = []
     for item in items:
         product = item["product"]
         result.append({
             "id": item["id"],
             "product_id": item["product_id"],
+            "variant_id": item["variant_id"],
             "quantity": item["quantity"],
+            "variant": item["variant"],
+            "unit_price": item["unit_price"],
+            "stock": item["stock"],
             "product": (
                 {k: v for k, v in product.__dict__.items() if not k.startswith("_")}
                 if product
@@ -42,8 +46,10 @@ def add_to_cart(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """加入购物车（同商品自动合并数量）"""
-    items = cart_service.add_to_cart(db, user.id, req.product_id, req.quantity)
+    """加入购物车（同商品同规格自动合并数量）"""
+    items = cart_service.add_to_cart(
+        db, user.id, req.product_id, req.quantity, req.variant_id
+    )
     return success(_serialize(items), message="已加入购物车")
 
 

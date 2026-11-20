@@ -44,14 +44,14 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
 
 @router.post("/auth/login")
 def login(req: LoginRequest, db: Session = Depends(get_db)):
-    """登录，返回 JWT + 用户 + 商家信息（无需传租户编码，自动按用户名定位）"""
+    """登录，返回 JWT + 用户 + 商家信息（平台管理员无归属商家）"""
     user, tenant = auth_service.login(db, req.username, req.password, req.tenant_code)
-    if tenant is None:
+    if tenant is None and user.role != "platform_admin":
         raise AuthError("账号异常：未归属任何商家")
-    token = security.create_token(user.id, user.role, tenant.id)
+    token = security.create_token(user.id, user.role, tenant.id if tenant else None)
     data = TokenResponse(
         token=token,
         user=UserOut.model_validate(user),
-        tenant=TenantOut.model_validate(tenant),
+        tenant=TenantOut.model_validate(tenant) if tenant else None,
     ).model_dump()
     return success(data, message="登录成功")

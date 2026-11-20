@@ -4,10 +4,20 @@
 HTTP 401 / 403 + 统一响应结构。
 
 权限模型：角色 → 权限点集合（见 ROLE_PERMISSIONS）。
-- admin    ：商家管理员 —— 商品/文档/分类管理 + 反馈查看 + 租户管理
+- platform_admin：平台管理员 —— 商家管理 / 平台分类 / 全平台数据监管 / 平台知识库
+- admin    ：商家管理员 —— 商品/文档/分类管理 + 反馈查看
 - editor   ：商家运营   —— 商品/文档/分类管理
 - customer ：顾客 —— 逛商城、下单、与 AI 客服对话，无管理权限
 - user/viewer：历史角色，等同顾客（无管理权限）
+
+【FastAPI 依赖注入的两个惯用法】（面试常问"FastAPI 好在哪"）
+  - get_current_user 是「资源依赖」：路由声明 Depends(get_current_user) 即自动完成
+    取 Header → 解 JWT → 查用户，路由函数拿到的直接是 User ORM 对象，零样板代码；
+  - require_permission(x) 是「依赖工厂」：闭包捕获权限点，返回一个依赖函数，
+    实现声明式鉴权 require_permission("product:manage")，权限声明长在路由签名上。
+
+【401 vs 403】未登录 / token 无效 = 401（身份问题，前端跳登录页）；
+  已登录但角色权限不够 = 403（权限问题，前端提示无权限）。二者不可混用。
 """
 from fastapi import Depends, Header
 from sqlalchemy.orm import Session
@@ -23,9 +33,13 @@ from app.utils import security
 
 # 角色 → 权限点
 ROLE_PERMISSIONS: dict[str, set[str]] = {
+    "platform_admin": {
+        "platform:manage", "tenant:manage",
+        "document:manage", "category:manage", "feedback:view",
+    },
     "admin": {
         "product:manage", "order:manage",
-        "document:manage", "category:manage", "feedback:view", "tenant:manage",
+        "document:manage", "category:manage", "feedback:view",
     },
     "editor": {"product:manage", "order:manage", "document:manage", "category:manage"},
     "customer": set(),
@@ -50,6 +64,11 @@ def get_current_user(
     user = UserRepository(db).get(user_id)
     if not user:
         raise AuthError("用户不存在")
+    # 商家被平台停用后，已签发的 token 也立即失效
+    if user.role in ("admin", "editor") and user.tenant_id:
+        tenant = TenantRepository(db).get(user.tenant_id)
+        if tenant and tenant.status != "active":
+            raise ForbiddenError("店铺已停用，请联系平台管理员")
     return user
 
 

@@ -40,4 +40,10 @@ class UserOut(BaseModel):
 class TokenResponse(BaseModel):
     token: str
     user: UserOut
-    tenant: TenantOut
+    # 平台管理员不归属任何店铺
+    tenant: TenantOut | None = None
+
+
+class TenantStatusRequest(BaseModel):
+    """平台管理员的商家启停操作"""
+    status: str = Field(pattern="^(active|disabled)$")

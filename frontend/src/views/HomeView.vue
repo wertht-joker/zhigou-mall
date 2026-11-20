@@ -38,8 +38,11 @@
 
     <!-- 商品区标题 -->
     <div class="section-title">
-      <h3>{{ activeCategoryName }} · 热销商品</h3>
-      <el-link type="primary" @click="goSearch(keyword)">查看更多</el-link>
+      <div class="section-heading">
+        <h3>{{ activeCategoryName }} · 热销商品</h3>
+        <p>为你精选 · 共 {{ total }} 件在售</p>
+      </div>
+      <el-link type="primary" @click="goSearch(keyword)">查看更多 →</el-link>
     </div>
 
     <!-- 商品瀑布 -->
@@ -60,11 +63,19 @@ import Double11Banner from '../components/Double11Banner.vue'
 const router = useRouter()
 const categories = ref([])
 const products = ref([])
+const total = ref(0)
 const loading = ref(false)
 const activeCategory = ref(null)
 const keyword = ref('')
 
-// 活动横幅自动轮播：618 ↔ 双11 每 6 秒来回切换，悬停暂停
+// ===== 活动横幅轮播：618 ↔ 双11 每 6 秒来回切换 =====
+// 实现要点（面试考点）：
+// 1) 状态只有一个布尔 showD11，模板里 <transition mode="out-in"> + CSS 滑动动画完成切换，
+//    不引入轮播库 —— 两个组件的切换用原生能力足够；
+// 2) 悬停暂停：mouseenter/mouseleave 清理/重启定时器，让用户看倒计时、领券时不被切走；
+// 3) 手动切换（两侧箭头/指示点）后调 startRotate() 重置 6 秒计时，
+//    避免"刚手动切过去又被自动切回来"的违和感；
+// 4) onBeforeUnmount 清理定时器 —— 组合式 API 的常见坑：定时器/事件监听随组件销毁必须手动清理。
 const showD11 = ref(false)
 let rotateTimer = null
 function startRotate() {
@@ -93,12 +104,17 @@ async function loadCategories() {
 async function loadProducts() {
   loading.value = true
   try {
-    products.value = await request.get('/products', {
+    // 首页只取第一页作为「热销精选」，完整列表在搜索页分页浏览
+    const data = await request.get('/products', {
       params: {
         keyword: keyword.value || undefined,
         category_id: activeCategory.value || undefined,
+        page: 1,
+        page_size: 12,
       },
     })
+    products.value = data.items || []
+    total.value = data.total || 0
   } catch (e) { /* 忽略 */ } finally {
     loading.value = false
   }
@@ -122,14 +138,22 @@ onMounted(() => {
 
 <style scoped>
 .banner {
-  background: linear-gradient(120deg, #e1251b 0%, #ff6e40 100%);
-  border-radius: 12px; padding: 40px 48px; color: #fff;
+  background: var(--brand-gradient);
+  border-radius: var(--radius-lg); padding: 44px 48px; color: #fff;
   display: flex; justify-content: space-between; align-items: center;
   margin-bottom: 20px;
+  box-shadow: 0 20px 40px rgba(255, 77, 79, .22);
+  position: relative; overflow: hidden;
 }
-.banner-text h2 { font-size: 30px; margin-bottom: 8px; }
-.banner-text p { opacity: .9; margin-bottom: 20px; font-size: 14px; }
-.banner-deco { font-size: 64px; letter-spacing: 8px; }
+.banner::after {
+  content: ''; position: absolute; right: -60px; top: -80px;
+  width: 280px; height: 280px; border-radius: 50%;
+  background: rgba(255, 255, 255, .14);
+}
+.banner-text { position: relative; z-index: 1; }
+.banner-text h2 { font-size: 32px; margin-bottom: 8px; letter-spacing: -.02em; }
+.banner-text p { opacity: .92; margin-bottom: 20px; font-size: 14px; }
+.banner-deco { font-size: 64px; letter-spacing: 8px; position: relative; z-index: 1; }
 
 /* 轮播容器与指示点 */
 .banner-wrap { position: relative; margin-bottom: 20px; }
@@ -165,24 +189,31 @@ onMounted(() => {
 .banner-swap-leave-to { opacity: 0; transform: translateX(-60px); }
 
 .category-nav {
-  background: #fff; border-radius: 8px; padding: 12px;
-  display: flex; gap: 8px; margin-bottom: 20px; overflow-x: auto;
+  background: #fff; border-radius: var(--radius-md); padding: 10px 12px;
+  display: flex; gap: 8px; margin-bottom: 24px; overflow-x: auto;
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, .04);
 }
 .category-item {
   display: flex; align-items: center; gap: 6px;
-  padding: 8px 18px; border-radius: 6px; cursor: pointer;
-  font-size: 14px; color: #444; white-space: nowrap;
+  padding: 9px 18px; border-radius: 999px; cursor: pointer;
+  font-size: 14px; color: #4b5563; white-space: nowrap;
   border: 1px solid transparent;
+  transition: background .2s, color .2s, border-color .2s;
 }
-.category-item:hover { background: #fcedea; }
-.category-item.active { background: #fcedea; color: #e1251b; border-color: #f3b8b3; font-weight: 600; }
+.category-item:hover { background: var(--brand-soft); color: var(--brand-strong); }
+.category-item.active {
+  background: var(--brand-soft); color: var(--brand-strong);
+  border-color: rgba(255, 77, 79, .28); font-weight: 600;
+}
 .cat-icon { font-size: 18px; }
 
-.section-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.section-title h3 { font-size: 18px; }
+.section-title { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 16px; }
+.section-heading h3 { font-size: 20px; color: var(--ink); letter-spacing: -.02em; }
+.section-heading p { margin-top: 4px; font-size: 12px; color: var(--muted); }
 
 .product-grid {
-  display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px;
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 18px;
 }
 @media (max-width: 1100px) { .product-grid { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 700px) { .product-grid { grid-template-columns: repeat(2, 1fr); } }

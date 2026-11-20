@@ -14,9 +14,11 @@ from openai import (  # noqa: E402
     OpenAI,
     RateLimitError,
 )
+import httpx  # noqa: E402
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from app.core.config import settings
+from app.core.config import deepseek_key_status, settings
+from app.core.errors import ServiceUnavailableError
 
 # 模块级缓存客户端
 _client = None
@@ -25,13 +27,35 @@ _client = None
 _RETRYABLE = (APIConnectionError, APITimeoutError, RateLimitError, InternalServerError)
 
 
+def is_llm_unavailable(exc: BaseException) -> bool:
+    """模型服务不可用（网络不通 / 超时 / 限流 / 5xx），调用方应降级回答"""
+    return isinstance(exc, _RETRYABLE)
+
+
+def ensure_llm_ready() -> None:
+    """调用模型前校验 Key；不可用时抛 503，避免底层报 UnicodeEncodeError"""
+    ok, reason = deepseek_key_status()
+    if not ok:
+        raise ServiceUnavailableError(
+            f"{reason}，请在 backend/.env 中填入真实 DeepSeek API Key 后重启服务"
+        )
+
+
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
+        ensure_llm_ready()
         # DeepSeek 兼容 OpenAI 接口
         _client = OpenAI(
             api_key=settings.deepseek_api_key,
             base_url=settings.deepseek_base_url,
+            # 网络被墙/断网时尽快失败，交给本地知识库降级回答；
+            # 重试统一由 tenacity 控制，避免 SDK 内建重试叠加放大等待时间
+            timeout=httpx.Timeout(
+                settings.llm_read_timeout,
+                connect=settings.llm_connect_timeout,
+            ),
+            max_retries=0,
         )
     return _client
 

@@ -1,5 +1,5 @@
 """商品接口：前台公开浏览 + 商家管理（需 product:manage 权限）"""
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_tenant, require_permission
@@ -19,11 +19,20 @@ router = APIRouter(tags=["商品"])
 def list_products(
     keyword: str | None = Query(default=None, max_length=50),
     category_id: int | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=12, ge=1, le=60),
     db: Session = Depends(get_db),
 ):
-    """商品列表（公开：全平台在售商品，按销量排序）"""
-    products = product_service.list_products(db, keyword, category_id)
-    return success([product_service.serialize_public(p, db) for p in products])
+    """商品列表（公开，分页）：全平台在售商品，按销量排序"""
+    products, total = product_service.list_products(
+        db, keyword, category_id, page, page_size
+    )
+    return success({
+        "items": [product_service.serialize_public(p, db) for p in products],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    })
 
 
 @router.get("/product-categories")
@@ -34,9 +43,9 @@ def list_categories(db: Session = Depends(get_db)):
 
 @router.get("/products/{product_id}")
 def get_product(product_id: int, db: Session = Depends(get_db)):
-    """商品详情（公开）"""
+    """商品详情（公开，含可选规格）"""
     return success(product_service.serialize_public(
-        product_service.get_product(db, product_id), db
+        product_service.get_product(db, product_id), db, with_variants=True
     ))
 
 
@@ -49,9 +58,9 @@ def list_merchant_products(
     user: User = Depends(require_permission("product:manage")),
     tenant: Tenant = Depends(get_current_tenant),
 ):
-    """本店商品列表（含下架，强制商家隔离）"""
+    """本店商品列表（含下架与规格，强制商家隔离）"""
     products = product_service.list_merchant_products(db, keyword, tenant.id)
-    return success([p.__dict__ for p in products])
+    return success([product_service.serialize_merchant(p, db) for p in products])
 
 
 @router.post("/merchant/products")
@@ -61,11 +70,11 @@ def create_product(
     user: User = Depends(require_permission("product:manage")),
     tenant: Tenant = Depends(get_current_tenant),
 ):
-    """商家上新"""
+    """商家上新（可带多规格）"""
     product = product_service.create_product(
         db, req.model_dump(), tenant.id
     )
-    return success(product.__dict__, message="商品已创建")
+    return success(product_service.serialize_merchant(product, db), message="商品已创建")
 
 
 @router.put("/merchant/products/{product_id}")
@@ -76,11 +85,24 @@ def update_product(
     user: User = Depends(require_permission("product:manage")),
     tenant: Tenant = Depends(get_current_tenant),
 ):
-    """商家修改商品（价格/库存/上下架等）"""
+    """商家修改商品（价格/库存/上下架/规格）"""
     product = product_service.update_product(
         db, product_id, req.model_dump(), tenant.id
     )
-    return success(product.__dict__, message="商品已更新")
+    return success(product_service.serialize_merchant(product, db), message="商品已更新")
+
+
+@router.post("/merchant/products/{product_id}/image")
+async def upload_product_image(
+    product_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("product:manage")),
+    tenant: Tenant = Depends(get_current_tenant),
+):
+    """商家上传商品主图（JPG/PNG/WEBP/GIF，最大 5MB）"""
+    data = product_service.save_product_image(db, product_id, file, tenant.id)
+    return success(data, message="主图已更新")
 
 
 @router.delete("/merchant/products/{product_id}")
