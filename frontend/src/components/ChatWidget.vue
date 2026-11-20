@@ -88,6 +88,21 @@
             </div>
           </div>
 
+          <!-- 售后进度卡片（售后查询工具结果） -->
+          <div v-if="msg.role === 'assistant' && msg.aftersales && msg.aftersales.length" class="orders">
+            <div v-for="t in msg.aftersales" :key="t.ticket_no" class="order-chip">
+              <div class="oc-head">
+                <span class="oc-no">{{ t.ticket_no }}</span>
+                <el-tag size="small" :type="aftersaleTagType(t.status)">{{ t.status }}</el-tag>
+              </div>
+              <div class="as-line">{{ t.kind }} ¥{{ t.amount }} · 订单 {{ t.order_no }}</div>
+              <div v-if="t.reason" class="as-reason">原因：{{ t.reason }}</div>
+              <div class="oc-foot">
+                <span class="oc-logi">更新于 {{ shortTime(t.updated_at || t.created_at) }}</span>
+              </div>
+            </div>
+          </div>
+
           <!-- 售后操作确认卡片（Agent 只生成提案，必须用户点击确认才执行） -->
           <div v-if="msg.role === 'assistant' && msg.actions && msg.actions.length" class="actions">
             <div v-for="a in msg.actions" :key="a.token" class="action-card" :class="a.uiState">
@@ -218,6 +233,15 @@ function orderTagType(status) {
   return { 待付款: 'warning', 待发货: 'primary', 已发货: 'success', 已完成: 'info', 已取消: 'danger' }[status] || 'info'
 }
 
+function aftersaleTagType(status) {
+  return { 待商家处理: 'warning', 处理中: 'primary', 已完成: 'success', 已驳回: 'danger' }[status] || 'info'
+}
+
+function shortTime(value) {
+  if (!value) return '—'
+  return String(value).replace('T', ' ').slice(0, 16)
+}
+
 function actionBadge(a) {
   return {
     pending: '待确认', executing: '执行中', done: '已执行',
@@ -345,7 +369,7 @@ async function send() {
   messages.value.push({ role: 'user', content: q })
   const aiMsg = {
     role: 'assistant', content: '', sources: [], steps: [],
-    products: [], orders: [], actions: [], verify: null,
+    products: [], orders: [], aftersales: [], actions: [], verify: null,
     route: null, retrieval: null,
     messageId: null, streaming: true,
   }
@@ -411,6 +435,10 @@ function handleEvent(event, aiMsg) {
   } else if (event.type === 'orders') {
     // 查单工具的结构化结果 → 订单卡片
     if (event.items && event.items.length) aiMsg.orders.push(...event.items)
+    scrollBottom()
+  } else if (event.type === 'aftersale') {
+    // 售后进度工具的结构化结果 → 工单卡片
+    if (event.items && event.items.length) aiMsg.aftersales.push(...event.items)
     scrollBottom()
   } else if (event.type === 'action') {
     // 写操作提案 → 确认卡片（默认待确认，点击后调用独立确认接口）
@@ -554,6 +582,8 @@ onMounted(() => {
 .oc-foot { margin-top: 6px; display: flex; justify-content: space-between; align-items: center; }
 .oc-total { color: #e1251b; font-size: 13px; font-weight: 600; }
 .oc-logi { font-size: 11px; color: #999; }
+.as-line { margin-top: 6px; font-size: 12px; color: #606266; }
+.as-reason { margin-top: 4px; font-size: 12px; color: #909399; }
 
 /* 售后操作确认卡片 */
 .actions { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }

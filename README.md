@@ -5,7 +5,7 @@
 **完整商家（多租户）隔离**、**混合检索（向量 + BM25 + RRF）**、结构化日志与 `trace_id` 可观测、Alembic 迁移、Docker Compose 与 CI。
 
 > 本项目由「RAG 智能客服知识库」重构而来：多租户语义升级为**商家/店铺**，新增**电商交易域**，
-> AI 客服 Agent 从 2 个工具扩展为 3 个工具（知识库检索 / 查我的订单 / 商品导购）。
+> AI 客服 Agent 从 2 个工具扩展为 7 个工具（知识库检索 / 订单查询 / 售后进度 / 商品导购 / 凑单测算 / 地址查询 / 售后操作提案）。
 > 完整需求见 [需求文档.md](./需求文档.md)　|　部署与面试演示见 [部署与演示说明.md](./部署与演示说明.md)
 
 ---
@@ -26,12 +26,16 @@
 
 **AI 智能客服（RAG 核心）**
 - **Agent 智能问答（ReAct + Function Calling）**：模型自主决定调哪个工具、调几轮，再汇总回答
-- **三个工具**：
+- **七个工具**：
   | 工具 | 作用 | 触发场景 |
   |---|---|---|
   | `search_knowledge_base` | 混合检索平台知识库（按商家隔离） | 售后政策、退换货、物流、积分等规则类问题 |
   | `query_my_orders` | 查**当前顾客自己**的订单（可按单号精确查） | 「我买的到哪了」「帮我查下单」 |
+  | `query_my_aftersale` | 查**当前顾客自己**的售后工单进度与金额 | 「我的退款到哪了」「售后处理得怎么样」 |
   | `recommend_products` | 商品导购（关键词 + 预算过滤，只推真实在售商品） | 「有没有降噪耳机推荐」「两千预算买什么」 |
+  | `recommend_promotion` | 凑单测算：真实券档位 + 购物车差额 + 补差商品 | 「我有什么券能用」「还差多少能减30」「帮我凑单」 |
+  | `list_my_addresses` | 查地址簿（改址提案需要真实地址 ID） | 「帮我改收货地址」 |
+  | `propose_after_sales_action` | 生成待确认的售后提案（取消/退款/改址） | 「帮我取消订单」「申请退款」；用户确认后执行 |
 - **混合检索**：向量语义召回 + BM25 关键词召回，用 **RRF** 融合；`hybrid_retrieval_enabled=false` 可回退纯向量
 - **可配置 Rerank**：`none`（不精排）/ `always`（总是精排）/ `conditional`（候选数达阈值才精排）
 - **查询缓存**：查询向量与检索结果进 Redis（键含 `tenant_id + query + 参数`，带 TTL）
@@ -282,7 +286,10 @@ npm run build:mp-weixin
 AI 客服：提问 → Agent 决定调哪个工具
   ├─ 规则类问题 → search_knowledge_base（向量+BM25 → RRF → rerank，按商家隔离）→ 带引用回答
   ├─ 查订单    → query_my_orders（限定当前 user_id，别人查不到你的单）
-  └─ 求推荐    → recommend_products（在售商品 + 预算过滤，不编造商品）
+  ├─ 查售后    → query_my_aftersale（退款/退货工单进度，同样按 user_id 隔离）
+  ├─ 求推荐    → recommend_products（在售商品 + 预算过滤，不编造商品）
+  ├─ 凑单      → recommend_promotion（真实券档位 + 购物车差额 + 补差商品卡片）
+  └─ 办售后    → list_my_addresses / propose_after_sales_action（提案 → 用户确认才执行）
 → DeepSeek 流式生成 → SSE 推送（step 工具步骤 / meta 引用 / delta 增量 / done）
 ```
 
@@ -316,15 +323,15 @@ python -m evals.run_eval
 
 ```bash
 cd backend
-python -m pytest -q      # 152 passed
+python -m pytest -q      # 157 passed
 ```
 
 - 测试用**内存 SQLite（StaticPool）**覆盖 `get_db`，**打桩** LLM / Milvus / BGE，不联网；
   上传接口用例真实落盘到 `static/uploads/` 后自动清理；
 - 覆盖：接口冒烟、统一错误契约、`trace_id` 可观测、**电商全链路**（加购→下单→支付→发货→收货、
   库存扣减/回补、越权 404）、**立即购买不写购物车**、**超时订单自动取消并回补库存**、
-  **商品/订单分页**、**主图上传**、**商家隔离**（商品/订单/会话/检索）、**AI 客服工具**（查我的订单、
-  商品导购、预算过滤）、多租户与权限、混合检索/RRF/rerank/评测。
+  **商品/订单分页**、**主图上传**、**商家隔离**（商品/订单/会话/检索）、**AI 客服工具**（查订单、查售后进度、
+  商品导购、预算过滤、凑单测算）、多租户与权限、混合检索/RRF/rerank/评测。
 
 ---
 
@@ -332,7 +339,7 @@ python -m pytest -q      # 152 passed
 
 - [x] M1 项目骨架（由知识库系统重构为电商平台）
 - [x] M2 电商域：商品 / 购物车 / 地址 / 订单状态机 / 商家入驻
-- [x] M3 AI 客服：3 工具 Agent（知识库 / 我的订单 / 商品导购）+ 引用溯源
+- [x] M3 AI 客服：Agent 工具链 + 引用溯源（已扩展至 7 个工具）
 - [x] M4 多商家隔离 + 角色权限（admin / editor / customer）
 - [x] M5 京东风前端：商城 + 商家后台 + AI 客服悬浮窗
 - [x] **R2 工程化：Alembic + PostgreSQL + 结构化日志/trace_id + Redis/限流 + Docker/CI + 重试**
@@ -340,6 +347,7 @@ python -m pytest -q      # 152 passed
 - [x] **R5 知识缺口闭环：问答事件采集 → 按商家聚类 → FAQ 草稿 → 一键入库 → 缺口关闭 → Top-K 命中率回归**
 - [x] **R6 交易体验补全：立即购买 / 待付款超时自动取消 / 商家主图上传 / 商品与订单分页 / 小程序优惠券**
 - [x] **R7 工程化收口：前端依赖分包、生产环境 JWT 密钥强校验、CI 增加 ruff 与小程序构建、小程序 API 地址环境变量化**
+- [x] **R8 AI 客服工具扩展：售后进度查询、优惠券凑单助手（真实券档位 + 差额测算 + 补差商品卡片）**
 
 ---
 
@@ -443,7 +451,7 @@ BM25 语料也按租户拉取（`fetch_chunks(tenant_id)`），避免跨商家�
 内存 SQLite（StaticPool）覆盖 `get_db`，LLM 三种调用（tools/text/stream）全部 monkeypatch 成固定回答，
 Milvus/BGE 打桩；上传接口用例真实落盘后自动清理。电商链路（加购→下单→支付→发货→收货）、库存回补、
 立即购买不写购物车、超时自动取消、列表分页、越权 404、AI 工具的归属过滤与预算过滤都有专门断言，
-152 个用例约 1 分钟跑完。
+157 个用例约 1 分钟跑完。
 
 **Q19：这个系统还能怎么改进？**
 ① 真实支付网关 + 异步回调验签幂等；② 商品主图从本地 `static/` 迁到对象存储 + CDN；

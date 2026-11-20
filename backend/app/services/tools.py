@@ -3,7 +3,11 @@
 Agent 能自主决定调用哪些工具、以什么参数调用：
 - search_knowledge_base：检索平台知识库（售后政策 / 物流说明 / FAQ 等）
 - query_my_orders：查询当前顾客的订单（可按订单号精确查，缺省查最近订单）
+- query_my_aftersale：查询当前顾客的售后工单进度（退款/退货处理到哪一步）
 - recommend_products：商品导购，按需求描述搜索在售商品
+- recommend_promotion：优惠券凑单测算，算出差额并推荐补差商品
+- list_my_addresses：查询当前顾客的地址簿（改址提案用）
+- propose_after_sales_action：生成待确认的售后操作提案（不直接执行）
 
 数据边界：知识库按租户（商家）隔离；订单只查当前登录用户自己的。
 
@@ -27,7 +31,11 @@ from app.repositories.document_repository import DocumentRepository
 from app.repositories.order_repository import OrderRepository
 from app.repositories.product_repository import ProductRepository
 from app.repositories.tenant_repository import TenantRepository
-from app.services import aftersale_service
+from app.services import (
+    aftersale_service,
+    cart_service,
+    coupon_service,
+)
 
 logger = logging.getLogger("app.tools")
 
@@ -102,6 +110,26 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "query_my_aftersale",
+            "description": (
+                "查询当前顾客自己的售后工单进度（退款/退货申请的处理状态、金额、原因）。"
+                "当用户问「我的退款到哪了」「售后处理得怎么样」「退款通过了吗」时调用。"
+                "只知道订单号时也可按订单号过滤；查不到工单时不要编造，如实告知并可引导发起售后。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "order_no": {
+                        "type": "string",
+                        "description": "订单号（可选），例如 ZG2026101900031",
+                    }
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "recommend_products",
             "description": (
                 "商品导购：根据用户描述的需求（品类、预算、用途、功能偏好）"
@@ -121,6 +149,34 @@ TOOLS = [
                     },
                 },
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recommend_promotion",
+            "description": (
+                "优惠券凑单助手：查询当前顾客未使用的优惠券与购物车小计，"
+                "计算还差多少元达到满减门槛，并推荐刚好补足差额的在售商品。"
+                "当用户问「我有什么券能用」「还差多少能减30」「帮我凑个单」时调用。"
+                "工具返回真实券档位、购物车金额与真实商品，禁止自行编造优惠规则或商品。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_threshold": {
+                        "type": "number",
+                        "description": (
+                            "用户明确提到的满减门槛（元），如「满199减30」传 199。"
+                            "没提到就不要传，工具会自动选一张最容易达成的券。"
+                        ),
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "凑单商品的品类偏好（可选），如「耳机」「纸巾」；没有偏好就不传",
+                    },
+                },
             },
         },
     },
@@ -191,6 +247,18 @@ def tool_label(name: str, args: dict) -> str:
         return f"🛠 {label}"
     if name == "recommend_products":
         return f"🛠 商品导购：{args.get('query', '')}"
+    if name == "query_my_aftersale":
+        label = "查询我的售后进度"
+        if args.get("order_no"):
+            label += f"：{args['order_no']}"
+        return f"🛠 {label}"
+    if name == "recommend_promotion":
+        label = "凑单测算"
+        if args.get("target_threshold"):
+            label += f"：满{args['target_threshold']}减"
+        if args.get("query"):
+            label += f"（{args['query']}）"
+        return f"🛠 {label}"
     if name == "list_my_addresses":
         return "🛠 查询我的收货地址"
     if name == "propose_after_sales_action":
@@ -395,6 +463,69 @@ def _query_my_orders(args: dict, db: Session,
     return ToolResult("\n\n".join(blocks), [], payload)
 
 
+def _query_my_aftersale(args: dict, db: Session,
+                        tenant_id: int | None = None,
+                        user_id: int | None = None,
+                        session_id: int | None = None) -> ToolResult:
+    """查询当前顾客自己的售后工单进度（只读）
+
+    与查单工具同样的边界：user_id 只来自服务端，模型传的订单号只用于过滤，
+    永远不会用它去查别人的工单；查不到时统一话术，不泄露工单存在性。
+    """
+    if user_id is None:
+        return ToolResult("当前用户未登录，无法查询售后进度。", [])
+
+    order_no = (args.get("order_no") or "").strip()
+    tickets = aftersale_service.list_my_tickets(db, user_id)
+    if order_no:
+        tickets = [t for t in tickets if t.get("order_no") == order_no]
+    if not tickets:
+        if order_no:
+            return ToolResult(
+                f"没有找到订单 {order_no} 的售后工单。如果还未提交申请，"
+                "可以告诉我退款原因，我帮您发起售后提案。",
+                [],
+            )
+        return ToolResult(
+            "您目前还没有售后工单。如果需要退款或退货，可以告诉我订单号，我帮您发起申请。",
+            [],
+        )
+
+    status_hints = {
+        "待商家处理": "商家还未审核，请耐心等待",
+        "处理中": "商家已受理，正在处理中",
+        "已完成": "审核通过，退款已处理完成",
+        "已驳回": "商家驳回了申请，可联系商家或转人工核实",
+    }
+    lines, items = [], []
+    for ticket in tickets[:5]:
+        hint = status_hints.get(ticket["status"], "")
+        updated = (ticket.get("updated_at") or ticket.get("created_at") or "")
+        lines.append(
+            f"工单号：{ticket['ticket_no']}\n"
+            f"订单号：{ticket['order_no']}\n"
+            f"类型：{ticket['kind']}，金额：¥{float(ticket['amount']):.2f}\n"
+            f"状态：{ticket['status']}{('（' + hint + '）') if hint else ''}\n"
+            f"原因：{ticket['reason'] or '未填写'}\n"
+            f"更新时间：{updated.replace('T', ' ')[:16] or '—'}"
+        )
+        items.append({
+            "ticket_no": ticket["ticket_no"],
+            "order_no": ticket["order_no"],
+            "kind": ticket["kind"],
+            "amount": ticket["amount"],
+            "status": ticket["status"],
+            "reason": ticket["reason"],
+            "created_at": ticket.get("created_at"),
+            "updated_at": ticket.get("updated_at"),
+        })
+    return ToolResult(
+        "\n\n".join(lines),
+        [],
+        {"type": "aftersale", "items": items},
+    )
+
+
 def _product_card(product, db: Session) -> dict:
     """商品卡片：复用前台序列化（店铺名 + 评价统计）"""
     from app.services.product_service import serialize_public
@@ -476,6 +607,144 @@ def _recommend_products(args: dict, db: Session,
     return ToolResult("\n".join(lines), [], payload)
 
 
+def _optional_float(value) -> float | None:
+    try:
+        return float(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _recommend_promotion(args: dict, db: Session,
+                         tenant_id: int | None = None,
+                         user_id: int | None = None,
+                         session_id: int | None = None) -> ToolResult:
+    """优惠券凑单测算：真实券档位 + 购物车小计 + 真实商品补差
+
+    金额全部来自服务端：券用 coupon_service，购物车用 cart_service，
+    商品用 ProductRepository；模型只负责提炼 target_threshold / query。
+    推荐逻辑优先选「单价刚好覆盖差额」的商品，避免为了凑单让用户多花太多钱。
+    """
+    if user_id is None:
+        return ToolResult("当前用户未登录，无法测算优惠券。", [])
+
+    cart = cart_service.get_cart(db, user_id)
+    subtotal = round(
+        sum(float(c["unit_price"]) * c["quantity"] for c in cart if c["product"]),
+        2,
+    )
+    coupons = [
+        c for c in coupon_service.list_my(db, user_id)
+        if c["status"] == "unused"
+    ]
+
+    if not coupons:
+        lines = [f"当前购物车小计 ¥{subtotal:.2f}，您还没有未使用的优惠券。"]
+        tiers = coupon_service.list_tiers()
+        if tiers:
+            tier_text = "、".join(
+                f"满{t['threshold']:g}减{t['discount']:g}" for t in tiers
+            )
+            lines.append(f"平台当前档位：{tier_text}，可以先到领券中心领取再回来凑单。")
+        return ToolResult("\n".join(lines), [])
+
+    target = _optional_float(args.get("target_threshold"))
+    usable = sorted(
+        [c for c in coupons if subtotal >= c["threshold"]],
+        key=lambda c: c["discount"], reverse=True,
+    )
+    pending = sorted(
+        [c for c in coupons if subtotal < c["threshold"]],
+        key=lambda c: c["threshold"],
+    )
+
+    already = None
+    chase = None
+    if target is not None:
+        nearest = min(coupons, key=lambda c: abs(c["threshold"] - target))
+        if subtotal >= nearest["threshold"]:
+            already = nearest
+            chase = next(
+                (c for c in pending if c["threshold"] > nearest["threshold"]), None
+            )
+        else:
+            chase = nearest
+    elif usable:
+        already = usable[0]
+        chase = pending[0] if pending else None
+    elif pending:
+        chase = pending[0]
+
+    lines = [f"当前购物车小计 ¥{subtotal:.2f}。"]
+    if already:
+        lines.append(
+            f"已可使用「{already['title']}」满{already['threshold']:g}"
+            f"减{already['discount']:g}，结算时选中即可。"
+        )
+    if not chase:
+        lines.append(
+            "当前没有更高门槛的券需要凑单，不建议为了优惠额外消费。"
+            if already else "暂无可凑单的优惠券。"
+        )
+        return ToolResult("\n".join(lines), [])
+
+    gap = round(float(chase["threshold"]) - subtotal, 2)
+    lines.append(
+        f"想用「{chase['title']}」满{chase['threshold']:g}减{chase['discount']:g}，"
+        f"还差 ¥{gap:.2f}。"
+    )
+
+    query = (args.get("query") or "").strip()
+    repo = ProductRepository(db)
+    candidates = (
+        repo.search_on_sale(query, limit=30)
+        if query else repo.list_public(limit=200)
+    )
+    pool = [
+        p for p in candidates
+        if p.status == "on_sale" and p.stock > 0 and p.price > 0
+    ]
+    if query:
+        # 有品类偏好时优先推荐覆盖差额的商品；没有则退回该品类全部候选
+        matched = [p for p in pool if p.price >= gap] or pool
+        picks = sorted(matched, key=lambda p: (p.price, -(p.sales or 0)))[:4]
+    else:
+        # 无偏好：选单价最接近差额的商品，尽量一次凑够
+        picks = sorted(
+            [p for p in pool if p.price >= gap],
+            key=lambda p: (p.price - gap, -(p.sales or 0)),
+        )[:4]
+        if len(picks) < 2:
+            rest = sorted(
+                [p for p in pool if p.id not in {x.id for x in picks}],
+                key=lambda p: abs(p.price - gap),
+            )
+            picks += rest[:4 - len(picks)]
+
+    if not picks:
+        lines.append("暂时没有找到合适的凑单商品，可以换个品类关键词或直接去商城逛逛。")
+        return ToolResult("\n".join(lines), [])
+
+    tenant_repo = TenantRepository(db)
+    lines.append("推荐以下商品补足差额（价格取最低规格，结算以所选规格为准）：")
+    cards = []
+    for product in picks:
+        tenant = tenant_repo.get(product.tenant_id) if product.tenant_id else None
+        store = tenant.name if tenant else "平台自营"
+        after = subtotal + float(product.price)
+        if after >= float(chase["threshold"]):
+            tail = f"凑单后 ¥{after:.2f}，即可用券"
+        else:
+            tail = f"凑单后 ¥{after:.2f}，还需再凑 ¥{float(chase['threshold']) - after:.2f}"
+        lines.append(f"- {product.name} ¥{product.price:.2f}（{store}）→ {tail}")
+        cards.append(_product_card(product, db))
+
+    return ToolResult(
+        "\n".join(lines),
+        [],
+        {"type": "products", "items": cards},
+    )
+
+
 def _list_my_addresses(args: dict, db: Session,
                        tenant_id: int | None = None,
                        user_id: int | None = None) -> ToolResult:
@@ -551,6 +820,16 @@ def _recommend_handler(args: dict, db: Session, tenant_id: int | None,
     return _recommend_products(args, db, tenant_id, user_id)
 
 
+def _aftersale_query_handler(args: dict, db: Session, tenant_id: int | None,
+                             user_id: int | None, session_id: int | None) -> ToolResult:
+    return _query_my_aftersale(args, db, tenant_id, user_id, session_id)
+
+
+def _promotion_handler(args: dict, db: Session, tenant_id: int | None,
+                       user_id: int | None, session_id: int | None) -> ToolResult:
+    return _recommend_promotion(args, db, tenant_id, user_id)
+
+
 def _address_handler(args: dict, db: Session, tenant_id: int | None,
                      user_id: int | None, session_id: int | None) -> ToolResult:
     return _list_my_addresses(args, db, tenant_id, user_id)
@@ -564,7 +843,9 @@ def _propose_handler(args: dict, db: Session, tenant_id: int | None,
 _HANDLERS = {
     "search_knowledge_base": _search_handler,
     "query_my_orders": _orders_handler,
+    "query_my_aftersale": _aftersale_query_handler,
     "recommend_products": _recommend_handler,
+    "recommend_promotion": _promotion_handler,
     "list_my_addresses": _address_handler,
     "propose_after_sales_action": _propose_handler,
 }
