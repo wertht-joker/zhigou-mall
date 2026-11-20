@@ -1,7 +1,7 @@
 # 智购商城 · 多商家电商平台 + AI 智能客服（RAG · ReAct Agent · 混合检索）
 
-基于 **FastAPI + LangChain + Milvus + DeepSeek + PostgreSQL/Redis + Vue3** 的京东风格电商平台：
-**多商家入驻**、商品/购物车/订单全流程、**AI 智能客服**（查订单 / 商品导购 / 售后政策问答，答案带引用来源）、
+基于 **FastAPI + LangChain + Milvus + DeepSeek + PostgreSQL/Redis + Vue3 + uni-app** 的京东风格电商平台：
+**多商家入驻**、网页商城 + 顾客端小程序、商品/购物车/订单全流程、**AI 智能客服**（查订单 / 商品导购 / 售后政策问答，答案带引用来源）、
 **完整商家（多租户）隔离**、**混合检索（向量 + BM25 + RRF）**、结构化日志与 `trace_id` 可观测、Alembic 迁移、Docker Compose 与 CI。
 
 > 本项目由「RAG 智能客服知识库」重构而来：多租户语义升级为**商家/店铺**，新增**电商交易域**，
@@ -53,7 +53,7 @@
 - **统一响应契约** `{code, message, data, trace_id}` + 全局异常处理器（真实 HTTP 状态码，路由无散落 `try/except`）
 - **结构化 JSON 日志** + `X-Request-ID` → `trace_id` 全链路透传（纯 ASGI 中间件，不影响 SSE）
 - **Redis 令牌桶限流**（Lua 脚本，Redis 不可用时降级为进程内实现）
-- **Alembic 迁移**：启动自动 `upgrade head`；电商表结构为独立 revision（`b4d8c2e61f07`）
+- **Alembic 迁移**：启动自动 `upgrade head`；电商域按主题拆成独立 revision（商品/评价 → 优惠券 → 变体/支付 → 物流 → 售后 → 订单超时 `e2b4c8d91f07`）
 - **健康检查**：`/health`（liveness）+ `/health/ready`（探 DB / 向量库 / Redis）
 - **Docker Compose** 一键起 PostgreSQL + Redis + Milvus + 后端 + 前端；**GitHub Actions** 跑 pytest、ruff 静态检查、前端构建与小程序 H5 构建
 - **检索评测**：`evals/` 提供 hit rate / MRR / recall@k 指标脚本（mock 模型，CI 可离线跑）
@@ -101,7 +101,7 @@ knowledge-base
 │   ├── tests/                    # ★ 150+ 用例（内存库 + 全打桩，覆盖电商/售后/检索/超时清理）
 │   ├── static/products/          # 演示商品实物图（运行时上传落在 static/uploads/）
 │   └── app/
-│       ├── main.py               # 入口：迁移 + 商城演示数据种子 + 路由注册
+│       ├── main.py               # 入口：迁移 + 商城演示数据种子 + 超时订单清理协程 + 路由注册
 │       ├── core/                 # config / errors / response / logging / middleware / redis / rate_limit / migrations
 │       ├── models/               # product / product_category / cart / address / order(+item) / tenant / user / document ...
 │       ├── schemas/              # Pydantic 请求/响应模型
@@ -123,7 +123,7 @@ knowledge-base
 ## 四、环境准备
 
 - Python 3.10+
-- Node.js 18+（前端）
+- Node.js 18+（前端 / 小程序）
 - DeepSeek API Key（platform.deepseek.com）
 - （可选）Docker Desktop：只有切换到 Milvus / PostgreSQL 时才需要
 
@@ -155,6 +155,7 @@ copy .env.example .env
 ### 3. 启动依赖（默认无需 Docker）
 
 项目根目录已提供 `start.bat`：双击后自动打开后端（8000）和前端（5173）两个窗口。
+小程序 H5 需另开一个终端：`cd miniapp && npm run dev:h5`（5174）。
 
 > 如需 PostgreSQL / Milvus：先 `docker compose up -d postgres redis milvus`，
 > 再在 `backend/.env` 中设置 `VECTOR_BACKEND=milvus` 与对应的 `DATABASE_URL`。
@@ -215,7 +216,7 @@ npm run build:mp-weixin
 
 | 账号 | 密码 | 角色 | 说明 |
 |---|---|---|---|
-| `demo` | `demo123` | 顾客 | 有历史订单（已发货/已完成/待付款各一单），可直接演示 AI 客服查订单 |
+| `demo` | `demo123` | 顾客 | 有多状态历史订单（待付款/待发货/已发货/已完成/已取消），可直接演示 AI 客服查订单与售后 |
 | `admin` | `admin123` | 平台管理员 | 平台监管：商家/分类/商品审核、知识库、审计、智能洞察，不参与店铺经营 |
 | `self` | `self123` | 自营店长 | 智购自营官方旗舰店（租户 `default`）管理员，负责自营店铺商品与发货 |
 | `shop` | `shop123` | 第三方商家管理员 | 星辰数码旗舰店（租户 `star`），演示多商家隔离与独立发货 |
@@ -245,6 +246,10 @@ npm run build:mp-weixin
 | POST | /orders | 下单（购物车条目或 `buy_now` + 地址，扣库存、清购物车） | 登录（本人） |
 | GET | /orders、/orders/{id} | 我的订单（分页列表/详情，**仅本人**） | 登录 |
 | POST | /orders/{id}/pay · /cancel · /confirm | 支付 / 取消 / 确认收货 | 登录（本人） |
+| GET/POST | /coupons、/coupons/claim、/coupons/tiers | 我的优惠券 / 领券 / 可领券档位 | 登录 |
+| GET/POST | /products/{id}/reviews、/reviews | 商品评价列表 / 发表评价（仅已购可评） | 公开 / 登录 |
+| GET | /aftersale/tickets、/merchant/aftersale/tickets | 售后工单（顾客查看 / 商家处理） | 登录 / `order:manage` |
+| GET | /platform/overview · /insights · /knowledge-gaps | 平台总览 / 智能洞察 / 知识缺口 | 平台管理员 |
 | GET | /merchant/orders | 商家订单列表（仅含本店商品的订单） | `order:manage` |
 | POST | /merchant/orders/{id}/ship | 商家发货（填物流单号） | `order:manage` |
 | POST | /chat、/chat/stream | AI 客服问答（SSE 流式） | 登录 |
@@ -314,9 +319,11 @@ cd backend
 python -m pytest -q      # 152 passed
 ```
 
-- 测试用**内存 SQLite（StaticPool）**覆盖 `get_db`，**打桩** LLM / Milvus / BGE / 上传目录，不联网；
+- 测试用**内存 SQLite（StaticPool）**覆盖 `get_db`，**打桩** LLM / Milvus / BGE，不联网；
+  上传接口用例真实落盘到 `static/uploads/` 后自动清理；
 - 覆盖：接口冒烟、统一错误契约、`trace_id` 可观测、**电商全链路**（加购→下单→支付→发货→收货、
-  库存扣减/回补、越权 404）、**商家隔离**（商品/订单/会话/检索）、**AI 客服工具**（查我的订单、
+  库存扣减/回补、越权 404）、**立即购买不写购物车**、**超时订单自动取消并回补库存**、
+  **商品/订单分页**、**主图上传**、**商家隔离**（商品/订单/会话/检索）、**AI 客服工具**（查我的订单、
   商品导购、预算过滤）、多租户与权限、混合检索/RRF/rerank/评测。
 
 ---
@@ -331,6 +338,8 @@ python -m pytest -q      # 152 passed
 - [x] **R2 工程化：Alembic + PostgreSQL + 结构化日志/trace_id + Redis/限流 + Docker/CI + 重试**
 - [x] **R4 混合检索（向量+BM25+RRF）+ 可配置 rerank + 查询缓存 + 评测指标**
 - [x] **R5 知识缺口闭环：问答事件采集 → 按商家聚类 → FAQ 草稿 → 一键入库 → 缺口关闭 → Top-K 命中率回归**
+- [x] **R6 交易体验补全：立即购买 / 待付款超时自动取消 / 商家主图上传 / 商品与订单分页 / 小程序优惠券**
+- [x] **R7 工程化收口：前端依赖分包、生产环境 JWT 密钥强校验、CI 增加 ruff 与小程序构建、小程序 API 地址环境变量化**
 
 ---
 
@@ -345,10 +354,13 @@ python -m pytest -q      # 152 passed
 只有已发货能确认收货——把业务规则集中在状态机里而不是散落在路由判断中。
 
 **Q2：库存怎么保证不多扣不少扣？**
-下单流程「先校验后扣减」：先遍历明细核对每件商品的库存与在售状态，任何一件不足就整体报错（不下单），
-校验通过后统一扣减，再生成订单与明细。取消订单时按明细快照回补库存。演示规模下单行事务足够；
-生产环境要防超卖可以把「校验 + 扣减」改成数据库条件更新（`update ... set stock=stock-n where stock>=n`）
-或 Redis 预扣，这是量级驱动的一致性升级。
+下单先做一轮「在售 / 规格 / 库存」预检——这一轮只是为了给用户友好提示，不承担并发正确性；
+真正的扣减是单条条件更新：
+`UPDATE products SET stock = stock - n WHERE id = ? AND status = 'on_sale' AND stock >= n`，
+**影响行数 = 1 才算成功**；有规格时同时扣规格库存，两者都成功才提交。两笔请求并发抢最后一件时，
+只有一个条件更新能命中，从根上杜绝超卖（比"先查后减"少了两步之间的竞态窗口）。
+取消订单、以及待付款超过 30 分钟被后台任务自动取消时，都按明细快照回补商品与规格库存，
+并关闭未支付流水、退回优惠券。
 
 **Q3：订单为什么要存商品快照而不是外键引用？**
 商品会改价、改名甚至下架删除，历史订单必须忠实反映「成交那一刻」的信息。所以订单明细冗余了
@@ -429,13 +441,14 @@ BM25 语料也按租户拉取（`fetch_chunks(tenant_id)`），避免跨商家�
 
 **Q18：测试怎么做到不联网也能跑全链路？**
 内存 SQLite（StaticPool）覆盖 `get_db`，LLM 三种调用（tools/text/stream）全部 monkeypatch 成固定回答，
-Milvus/BGE/上传目录打桩。电商链路（加购→下单→支付→发货→收货）、库存回补、越权 404、
-AI 工具的归属过滤与预算过滤都有专门断言，152 个用例约 1 分钟跑完。
+Milvus/BGE 打桩；上传接口用例真实落盘后自动清理。电商链路（加购→下单→支付→发货→收货）、库存回补、
+立即购买不写购物车、超时自动取消、列表分页、越权 404、AI 工具的归属过滤与预算过滤都有专门断言，
+152 个用例约 1 分钟跑完。
 
 **Q19：这个系统还能怎么改进？**
-① 库存防超卖升级为条件更新/Redis 预扣；② 大文档解析进任务队列（当前刻意保持轻量）；
-③ 真实支付网关 + 回调幂等；④ Milvus sparse 向量替代内存 BM25 支撑更大语料；
-⑤ 评测接入 LLM 打分（正确性/忠实度）做端到端评估；⑥ 商家结算/分账域。
+① 真实支付网关 + 异步回调验签幂等；② 商品主图从本地 `static/` 迁到对象存储 + CDN；
+③ 大文档解析进任务队列（当前刻意保持轻量）；④ Milvus sparse 向量替代内存 BM25 支撑更大语料；
+⑤ 评测接入 LLM 打分（正确性/忠实度）做端到端评估；⑥ 商家结算/分账域；⑦ 订单支付成功后发消息通知（站内信/短信）。
 
 ---
 
